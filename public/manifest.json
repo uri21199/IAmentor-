@@ -1,0 +1,26 @@
+{
+  "name": "Mentor IA Personal",
+  "short_name": "MentorIA",
+  "description": "Tu mentor inteligente de productividad",
+  "start_url": "/today",
+  "display": "standalone",
+  "background_color": "#0A0F1E",
+  "theme_color": "#0A0F1E",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable any"
+    }
+  ],
+  "categories": ["productivity", "education"],
+  "lang": "es"
+}

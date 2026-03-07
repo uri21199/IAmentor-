@@ -34,3 +34,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# secrets & local config (never commit)
+.env.local.txt
+.env.*.txt
+
+# Claude Code internal
+.claude/
