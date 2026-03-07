@@ -4,7 +4,7 @@ import { generateDailyPlan } from '@/lib/anthropic'
 import { calculateStudyPriorities } from '@/lib/study-priority'
 import { getTodayEvents, refreshAccessToken } from '@/lib/google-calendar'
 import { format, subDays } from 'date-fns'
-import type { PlanGenerationContext, SubjectWithDetails } from '@/types'
+import type { PlanGenerationContext, SubjectWithDetails, TimeBlock } from '@/types'
 
 export async function POST() {
   try {
@@ -16,6 +16,7 @@ export async function POST() {
     }
 
     const today = format(new Date(), 'yyyy-MM-dd')
+    const todayDow = new Date().getDay() // 0=Sun, 1=Mon, ..., 6=Sat
 
     // ── 1. Get today's check-in ─────────────────────────────
     const { data: checkin } = await supabase
@@ -54,7 +55,6 @@ export async function POST() {
         `)
         .eq('semester_id', semester.id)
 
-      // Sort units and topics
       subjectsWithDetails = ((subjects as any[]) || []).map(s => ({
         ...s,
         upcoming_events: [],
@@ -63,15 +63,12 @@ export async function POST() {
           .map((u: any) => ({ ...u, topics: u.topics || [] })),
       }))
 
-      // Get upcoming academic events
       const { data: events } = await supabase
         .from('academic_events')
         .select('*')
         .eq('user_id', user.id)
         .gte('date', today)
-        .lte('date', format(
-          new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), 'yyyy-MM-dd'
-        ))
+        .lte('date', format(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), 'yyyy-MM-dd'))
         .order('date')
 
       academicEvents = events || []
@@ -97,8 +94,6 @@ export async function POST() {
     if (integration?.access_token) {
       try {
         let accessToken = integration.access_token
-
-        // Refresh if expired
         if (integration.token_expiry && new Date(integration.token_expiry) < new Date()) {
           accessToken = await refreshAccessToken(integration.refresh_token)
           await supabase
@@ -106,21 +101,67 @@ export async function POST() {
             .update({ access_token: accessToken, token_expiry: new Date(Date.now() + 3600000).toISOString() })
             .eq('id', integration.id)
         }
-
         calendarEvents = await getTodayEvents(accessToken, integration.refresh_token)
       } catch (err) {
         console.error('Calendar fetch error:', err)
-        // Non-fatal: continue without calendar
       }
     }
 
-    // ── 5. Calculate study priorities ──────────────────────
+    // ── 5. Fixed blocks from user_config + class_schedule ───
+    const fixedBlocks: TimeBlock[] = []
+
+    const [{ data: userConfig }, { data: todayClasses }] = await Promise.all([
+      supabase.from('user_config').select('*').eq('user_id', user.id).single(),
+      supabase
+        .from('class_schedule')
+        .select('*, subjects(name, color)')
+        .eq('user_id', user.id)
+        .eq('day_of_week', todayDow)
+        .eq('is_active', true)
+        .order('start_time'),
+    ])
+
+    // Work block — only if today is a work day and check-in mode isn't no_work/libre
+    if (userConfig) {
+      const workDays: number[] = userConfig.work_days_json || [1, 2, 3, 4, 5]
+      const isWorkDay = workDays.includes(todayDow)
+      if (isWorkDay && checkin.work_mode !== 'no_work' && checkin.work_mode !== 'libre') {
+        const workTitle = checkin.work_mode === 'presencial' ? '💼 Trabajo presencial' : '🏠 Trabajo remoto'
+        fixedBlocks.push({
+          id: 'fixed_work',
+          start_time: userConfig.work_start,
+          end_time: userConfig.work_end,
+          type: 'work',
+          title: workTitle,
+          description: `Horario laboral — ${checkin.work_mode}`,
+          completed: false,
+          priority: 'medium',
+        })
+      }
+    }
+
+    // Class blocks — one per scheduled class today
+    for (const cls of (todayClasses || [])) {
+      fixedBlocks.push({
+        id: `fixed_class_${cls.id}`,
+        start_time: cls.start_time,
+        end_time: cls.end_time,
+        type: 'class',
+        title: `Clase: ${cls.subjects?.name || 'Materia'}`,
+        description: `${cls.modality === 'presencial' ? '🏫 Presencial' : '💻 Virtual'} — ${cls.subjects?.name || 'Materia'}`,
+        subject_id: cls.subject_id,
+        completed: false,
+        priority: 'high',
+      })
+    }
+
+    // ── 6. Calculate study priorities ──────────────────────
     const studyPriorities = calculateStudyPriorities({
       subjects: subjectsWithDetails,
       academic_events: academicEvents,
     })
 
-    // ── 6. Build context and call Claude ───────────────────
+    // ── 7. Build context and call Claude ───────────────────
     const context: PlanGenerationContext = {
       checkin,
       calendar_events: calendarEvents,
@@ -128,19 +169,25 @@ export async function POST() {
       academic_events: academicEvents,
       energy_history: energyHistory || [],
       study_priorities: studyPriorities,
+      fixed_blocks: fixedBlocks,
     }
 
-    const blocks = await generateDailyPlan(context)
+    const claudeBlocks = await generateDailyPlan(context)
 
-    // ── 7. Save plan to DB ──────────────────────────────────
+    // ── 8. Merge fixed + AI blocks, sorted by start time ───
+    const allBlocks = [...fixedBlocks, ...claudeBlocks].sort((a, b) =>
+      a.start_time.localeCompare(b.start_time)
+    )
+
+    // ── 9. Save plan to DB ──────────────────────────────────
     await supabase.from('daily_plans').upsert({
       user_id: user.id,
       date: today,
-      plan_json: blocks,
+      plan_json: allBlocks,
       completion_percentage: 0,
     })
 
-    return NextResponse.json({ blocks })
+    return NextResponse.json({ blocks: allBlocks })
   } catch (err: any) {
     console.error('Plan generation error:', err)
     return NextResponse.json({ error: err.message }, { status: 500 })

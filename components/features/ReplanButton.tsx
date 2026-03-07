@@ -47,7 +47,7 @@ export default function ReplanButton() {
 
       {/* Modal */}
       {open && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center p-4 bg-black/60 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-end justify-center px-4 pt-4 pb-24 bg-black/60 backdrop-blur-sm">
           <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-3xl p-5 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <div>

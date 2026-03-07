@@ -137,6 +137,10 @@ CREATE TABLE IF NOT EXISTS user_integrations (
 -- ROW LEVEL SECURITY
 -- ============================================================
 
+-- ============================================================
+-- ROW LEVEL SECURITY
+-- ============================================================
+
 ALTER TABLE semesters ENABLE ROW LEVEL SECURITY;
 ALTER TABLE subjects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE units ENABLE ROW LEVEL SECURITY;
@@ -150,14 +154,17 @@ ALTER TABLE travel_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_integrations ENABLE ROW LEVEL SECURITY;
 
 -- Semesters policies
+DROP POLICY IF EXISTS "Users can manage own semesters" ON semesters;
 CREATE POLICY "Users can manage own semesters" ON semesters
   FOR ALL USING (auth.uid() = user_id);
 
 -- Subjects policies
+DROP POLICY IF EXISTS "Users can manage own subjects" ON subjects;
 CREATE POLICY "Users can manage own subjects" ON subjects
   FOR ALL USING (auth.uid() = user_id);
 
 -- Units — via subject ownership
+DROP POLICY IF EXISTS "Users can manage own units" ON units;
 CREATE POLICY "Users can manage own units" ON units
   FOR ALL USING (
     EXISTS (
@@ -166,6 +173,7 @@ CREATE POLICY "Users can manage own units" ON units
   );
 
 -- Topics — via unit → subject ownership
+DROP POLICY IF EXISTS "Users can manage own topics" ON topics;
 CREATE POLICY "Users can manage own topics" ON topics
   FOR ALL USING (
     EXISTS (
@@ -176,30 +184,37 @@ CREATE POLICY "Users can manage own topics" ON topics
   );
 
 -- Academic events
+DROP POLICY IF EXISTS "Users can manage own academic events" ON academic_events;
 CREATE POLICY "Users can manage own academic events" ON academic_events
   FOR ALL USING (auth.uid() = user_id);
 
 -- Check-ins
+DROP POLICY IF EXISTS "Users can manage own checkins" ON checkins;
 CREATE POLICY "Users can manage own checkins" ON checkins
   FOR ALL USING (auth.uid() = user_id);
 
 -- Daily plans
+DROP POLICY IF EXISTS "Users can manage own daily plans" ON daily_plans;
 CREATE POLICY "Users can manage own daily plans" ON daily_plans
   FOR ALL USING (auth.uid() = user_id);
 
 -- Class logs
+DROP POLICY IF EXISTS "Users can manage own class logs" ON class_logs;
 CREATE POLICY "Users can manage own class logs" ON class_logs
   FOR ALL USING (auth.uid() = user_id);
 
 -- Workouts
+DROP POLICY IF EXISTS "Users can manage own workouts" ON workouts;
 CREATE POLICY "Users can manage own workouts" ON workouts
   FOR ALL USING (auth.uid() = user_id);
 
 -- Travel logs
+DROP POLICY IF EXISTS "Users can manage own travel logs" ON travel_logs;
 CREATE POLICY "Users can manage own travel logs" ON travel_logs
   FOR ALL USING (auth.uid() = user_id);
 
 -- User integrations
+DROP POLICY IF EXISTS "Users can manage own integrations" ON user_integrations;
 CREATE POLICY "Users can manage own integrations" ON user_integrations
   FOR ALL USING (auth.uid() = user_id);
 

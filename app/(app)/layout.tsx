@@ -19,7 +19,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       {/* Floating replan button */}
       <ReplanButton />
 
-      {/* Bottom navigation */}
+      {/* Bottom navigation (includes Settings ⚙️) */}
       <BottomNav />
     </div>
   )

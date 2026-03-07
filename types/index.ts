@@ -204,6 +204,48 @@ export interface PlanGenerationContext {
   academic_events: AcademicEvent[]
   energy_history: { date: string; energy_level: number }[]
   study_priorities: StudyPriorityResult[]
+  fixed_blocks: TimeBlock[]
+}
+
+// ============================================================
+// USER CONFIG & CLASS SCHEDULE TYPES
+// ============================================================
+
+export type WorkDefaultMode = 'presencial' | 'remoto' | 'mixto'
+export type ClassModality = 'presencial' | 'virtual'
+
+export interface UserConfig {
+  id: string
+  user_id: string
+  work_days_json: number[]
+  work_start: string
+  work_end: string
+  work_default_mode: WorkDefaultMode
+  presential_days_json: number[]
+  created_at: string
+  updated_at: string
+}
+
+export interface ClassScheduleEntry {
+  id: string
+  user_id: string
+  subject_id: string
+  subject?: { name: string; color: string }
+  day_of_week: number
+  start_time: string
+  end_time: string
+  modality: ClassModality
+  is_active: boolean
+  created_at: string
+}
+
+export interface Profile {
+  id: string
+  email: string | null
+  full_name: string | null
+  avatar_url: string | null
+  created_at: string
+  updated_at: string
 }
 
 export interface GoogleCalendarEvent {

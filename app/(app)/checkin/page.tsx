@@ -31,19 +31,49 @@ export default function CheckInPage() {
     unexpected_events: '',
   })
 
-  // Check if already done today
+  // Check if already done today + pre-fill work_mode from user_config
   useEffect(() => {
     async function check() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
+
       const today = format(new Date(), 'yyyy-MM-dd')
-      const { data } = await supabase
+      const { data: existing } = await supabase
         .from('checkins')
         .select('id')
         .eq('user_id', user.id)
         .eq('date', today)
         .single()
-      if (data) setAlreadyDone(true)
+      if (existing) {
+        setAlreadyDone(true)
+        return
+      }
+
+      // Pre-fill work_mode from user_config
+      const { data: config } = await supabase
+        .from('user_config')
+        .select('work_days_json, work_default_mode, presential_days_json')
+        .eq('user_id', user.id)
+        .single()
+
+      if (config) {
+        const todayDow = new Date().getDay()
+        const workDays: number[] = config.work_days_json || [1, 2, 3, 4, 5]
+        if (workDays.includes(todayDow)) {
+          let defaultMode: WorkMode = 'remoto'
+          if (config.work_default_mode === 'presencial') {
+            defaultMode = 'presencial'
+          } else if (config.work_default_mode === 'remoto') {
+            defaultMode = 'remoto'
+          } else if (config.work_default_mode === 'mixto') {
+            const presentialDays: number[] = config.presential_days_json || []
+            defaultMode = presentialDays.includes(todayDow) ? 'presencial' : 'remoto'
+          }
+          setForm(f => ({ ...f, work_mode: defaultMode }))
+        } else {
+          setForm(f => ({ ...f, work_mode: 'no_work' }))
+        }
+      }
     }
     check()
   }, [])

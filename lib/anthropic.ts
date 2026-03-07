@@ -16,7 +16,9 @@ export const anthropic = new Anthropic({
 export async function generateDailyPlan(
   context: PlanGenerationContext
 ): Promise<TimeBlock[]> {
-  const { checkin, calendar_events, subjects_with_topics, study_priorities, energy_history } = context
+  const { checkin, calendar_events, subjects_with_topics, study_priorities, energy_history, fixed_blocks } = context
+
+  const currentTime = format(new Date(), 'HH:mm')
 
   const travelSegments = checkin.travel_route_json
     .map((s, i) => `  Tramo ${i + 1}: ${s.origin} → ${s.destination} (${s.duration_minutes} min)`)
@@ -41,7 +43,19 @@ export async function generateDailyPlan(
     .map(h => `${h.date}: ${h.energy_level}/5`)
     .join(', ')
 
-  const prompt = `Eres un mentor de productividad personal. Generá un plan de bloques de tiempo para hoy.
+  const fixedBlocksStr = fixed_blocks.length > 0
+    ? fixed_blocks
+        .map(b => `  - ${b.start_time}–${b.end_time}: ${b.title} (tipo: ${b.type})`)
+        .join('\n')
+    : '  (ninguno)'
+
+  const prompt = `Eres un mentor de productividad personal. Generá los bloques de tiempo ADICIONALES para hoy.
+
+## HORA ACTUAL: ${currentTime}
+
+## BLOQUES FIJOS (ya están agendados — NO los incluyas en tu respuesta)
+${fixedBlocksStr}
+IMPORTANTE: NO generes bloques que se superpongan con los bloques fijos. Solo generá bloques para los huecos disponibles.
 
 ## DATOS DEL CHECK-IN
 - Calidad de sueño: ${checkin.sleep_quality}/5
@@ -65,16 +79,16 @@ ${energyTrend}
 
 ## REGLAS IMPORTANTES
 1. Insertá bloques de VIAJE en los tramos indicados
-2. En bloques de viaje: SOLO estudio teórico (conceptos, teoría). NUNCA ejercicios prácticos
+2. En bloques de viaje: SOLO estudio teórico. NUNCA ejercicios prácticos
 3. Sugerí qué tema teórico estudiar en cada tramo según urgencia académica
 4. Adaptá la intensidad según energía: ${checkin.energy_level}/5
 5. Si energía ≤ 2: sesiones de máx 25 min con descansos frecuentes
-6. Horario desde las 07:00 hasta las 23:00
+6. Empezá los bloques desde las ${currentTime} (hora actual), el horario llega hasta las 23:00
 7. Incluí al menos 2 bloques de descanso
-8. Si hay modalidad de trabajo, incluí bloque de trabajo de 8-9hs
+8. NO repitas los bloques fijos ya indicados arriba
 
 ## FORMATO DE RESPUESTA
-Respondé ÚNICAMENTE con un JSON array de bloques. Cada bloque:
+Respondé ÚNICAMENTE con un JSON array de los bloques ADICIONALES. Cada bloque:
 {
   "id": "block_1",
   "start_time": "HH:MM",
@@ -101,7 +115,6 @@ Generá el JSON array directamente, sin markdown, sin explicaciones adicionales.
     const blocks: TimeBlock[] = JSON.parse(content.text)
     return blocks
   } catch {
-    // Try to extract JSON from response
     const jsonMatch = content.text.match(/\[[\s\S]*\]/)
     if (jsonMatch) {
       return JSON.parse(jsonMatch[0])

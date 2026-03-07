@@ -7,6 +7,8 @@ import Button from '@/components/ui/Button'
 export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [fullName, setFullName] = useState('')
   const [isSignUp, setIsSignUp] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -14,28 +16,74 @@ export default function LoginPage() {
 
   const supabase = createClient()
 
+  function validate(): string | null {
+    if (!email || !password) return 'Completá todos los campos obligatorios.'
+    if (password.length < 6) return 'La contraseña debe tener al menos 6 caracteres.'
+    if (isSignUp) {
+      if (!fullName.trim()) return 'Ingresá tu nombre completo.'
+      if (password !== confirmPassword) return 'Las contraseñas no coinciden.'
+    }
+    return null
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    setLoading(true)
     setError(null)
     setSuccess(null)
 
+    const validationError = validate()
+    if (validationError) {
+      setError(validationError)
+      return
+    }
+
+    setLoading(true)
     try {
       if (isSignUp) {
-        const { error } = await supabase.auth.signUp({ email, password })
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: { data: { full_name: fullName.trim() } },
+        })
         if (error) throw error
-        setSuccess('Revisá tu email para confirmar la cuenta. Luego podés iniciar sesión.')
+        // Session returned immediately when email confirmation is disabled
+        if (data.session) {
+          window.location.href = '/today'
+        } else {
+          setSuccess('Cuenta creada. Revisá tu email para confirmar y luego iniciá sesión.')
+        }
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password })
         if (error) throw error
         window.location.href = '/today'
       }
     } catch (err: any) {
-      setError(err.message || 'Ocurrió un error')
+      const msg = err.message || 'Ocurrió un error'
+      if (msg.includes('Invalid login credentials')) {
+        setError('Email o contraseña incorrectos.')
+      } else if (msg.includes('Email not confirmed')) {
+        setError('Confirmá tu email antes de iniciar sesión.')
+      } else if (msg.includes('User already registered')) {
+        setError('Este email ya está registrado. Iniciá sesión.')
+      } else {
+        setError(msg)
+      }
     } finally {
       setLoading(false)
     }
   }
+
+  function switchMode() {
+    setIsSignUp(!isSignUp)
+    setError(null)
+    setSuccess(null)
+    setConfirmPassword('')
+    setFullName('')
+  }
+
+  const inputClass = `w-full h-11 px-4 rounded-2xl bg-surface-2 border border-border-subtle
+    text-text-primary placeholder-text-secondary text-sm
+    focus:outline-none focus:border-primary/60 transition-colors`
 
   return (
     <div className="min-h-dvh bg-background flex flex-col items-center justify-center px-5">
@@ -48,14 +96,48 @@ export default function LoginPage() {
         <p className="text-text-secondary text-sm mt-1">Tu compañero de productividad inteligente</p>
       </div>
 
-      {/* Form */}
       <div className="w-full max-w-sm">
         <div className="bg-surface border border-border-subtle rounded-3xl p-6 shadow-2xl">
-          <h2 className="text-lg font-semibold text-text-primary mb-5">
-            {isSignUp ? 'Crear cuenta' : 'Iniciar sesión'}
-          </h2>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Tab switcher */}
+          <div className="flex gap-1 p-1 bg-surface-2 rounded-2xl mb-5">
+            {[
+              { value: false, label: 'Iniciar sesión' },
+              { value: true, label: 'Registrarse' },
+            ].map(tab => (
+              <button
+                key={String(tab.value)}
+                onClick={() => { if (isSignUp !== tab.value) switchMode() }}
+                className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${
+                  isSignUp === tab.value
+                    ? 'bg-surface text-text-primary shadow-sm'
+                    : 'text-text-secondary hover:text-text-primary'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-3">
+            {isSignUp && (
+              <div>
+                <label className="block text-sm text-text-secondary mb-1.5" htmlFor="fullName">
+                  Nombre completo
+                </label>
+                <input
+                  id="fullName"
+                  type="text"
+                  value={fullName}
+                  onChange={e => setFullName(e.target.value)}
+                  required={isSignUp}
+                  autoComplete="name"
+                  className={inputClass}
+                  placeholder="Tu nombre"
+                />
+              </div>
+            )}
+
             <div>
               <label className="block text-sm text-text-secondary mb-1.5" htmlFor="email">
                 Email
@@ -66,9 +148,8 @@ export default function LoginPage() {
                 value={email}
                 onChange={e => setEmail(e.target.value)}
                 required
-                className="w-full h-11 px-4 rounded-2xl bg-surface-2 border border-border-subtle
-                           text-text-primary placeholder-text-secondary text-sm
-                           focus:outline-none focus:border-primary/60 transition-colors"
+                autoComplete="email"
+                className={inputClass}
                 placeholder="tu@email.com"
               />
             </div>
@@ -84,12 +165,30 @@ export default function LoginPage() {
                 onChange={e => setPassword(e.target.value)}
                 required
                 minLength={6}
-                className="w-full h-11 px-4 rounded-2xl bg-surface-2 border border-border-subtle
-                           text-text-primary placeholder-text-secondary text-sm
-                           focus:outline-none focus:border-primary/60 transition-colors"
+                autoComplete={isSignUp ? 'new-password' : 'current-password'}
+                className={inputClass}
                 placeholder="••••••••"
               />
             </div>
+
+            {isSignUp && (
+              <div>
+                <label className="block text-sm text-text-secondary mb-1.5" htmlFor="confirmPassword">
+                  Confirmar contraseña
+                </label>
+                <input
+                  id="confirmPassword"
+                  type="password"
+                  value={confirmPassword}
+                  onChange={e => setConfirmPassword(e.target.value)}
+                  required={isSignUp}
+                  minLength={6}
+                  autoComplete="new-password"
+                  className={inputClass}
+                  placeholder="••••••••"
+                />
+              </div>
+            )}
 
             {error && (
               <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20">
@@ -103,21 +202,10 @@ export default function LoginPage() {
               </div>
             )}
 
-            <Button type="submit" size="lg" className="w-full" loading={loading}>
+            <Button type="submit" size="lg" className="w-full !mt-4" loading={loading}>
               {isSignUp ? 'Crear cuenta' : 'Entrar'}
             </Button>
           </form>
-
-          <div className="mt-4 text-center">
-            <button
-              onClick={() => { setIsSignUp(!isSignUp); setError(null); setSuccess(null) }}
-              className="text-sm text-text-secondary hover:text-primary transition-colors"
-            >
-              {isSignUp
-                ? '¿Ya tenés cuenta? Iniciá sesión'
-                : '¿No tenés cuenta? Registrate'}
-            </button>
-          </div>
         </div>
 
         {/* Features preview */}

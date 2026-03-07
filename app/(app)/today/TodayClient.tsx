@@ -9,7 +9,7 @@ import { TimeBlock } from '@/components/ui/TimeBlock'
 import { Badge } from '@/components/ui/Badge'
 import { ProgressBar } from '@/components/ui/ProgressBar'
 import Button from '@/components/ui/Button'
-import { getGreeting, getDaysColor, stressLabel, workModeLabel } from '@/lib/utils'
+import { getGreeting, stressLabel, workModeLabel } from '@/lib/utils'
 import type { CheckIn, DailyPlan, AcademicEvent, TimeBlock as TimeBlockType } from '@/types'
 import { getDaysColor as getColor } from '@/lib/study-priority'
 

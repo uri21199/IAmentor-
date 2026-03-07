@@ -24,22 +24,36 @@ interface Props {
 export default function SubjectDetailClient({ subject, events, classLogs, today, userId }: Props) {
   const supabase = createClient()
 
-  // Local state for topic statuses (optimistic updates)
+  // ── Topic statuses (optimistic updates) ───────────────────
   const [unitTopics, setUnitTopics] = useState<Record<string, Topic[]>>(
     Object.fromEntries(subject.units.map(u => [u.id, u.topics]))
   )
 
-  // Class log modal
+  // ── Local units list (for adding new units without page reload) ──
+  const [localUnits, setLocalUnits] = useState<Array<{ id: string; name: string; order_index: number }>>(
+    subject.units.map(u => ({ id: u.id, name: u.name, order_index: u.order_index }))
+  )
+
+  // ── Add unit ──────────────────────────────────────────────
+  const [showAddUnit, setShowAddUnit] = useState(false)
+  const [newUnitName, setNewUnitName] = useState('')
+  const [addingUnit, setAddingUnit] = useState(false)
+
+  // ── Add topic ─────────────────────────────────────────────
+  const [addingTopicForUnit, setAddingTopicForUnit] = useState<string | null>(null)
+  const [newTopicName, setNewTopicName] = useState('')
+  const [addingTopic, setAddingTopic] = useState(false)
+
+  // ── Class log modal ───────────────────────────────────────
   const [showClassLog, setShowClassLog] = useState(false)
   const [classLogData, setClassLogData] = useState({
     understanding_level: 3,
     has_homework: false,
     homework_description: '',
-    notes: '',
   })
   const [logLoading, setLogLoading] = useState(false)
 
-  // Event modal
+  // ── Event modal ───────────────────────────────────────────
   const [showEventForm, setShowEventForm] = useState(false)
   const [eventData, setEventData] = useState({
     type: 'parcial' as AcademicEventType,
@@ -50,24 +64,64 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
   const [eventLoading, setEventLoading] = useState(false)
   const [localEvents, setLocalEvents] = useState<AcademicEvent[]>(events)
 
+  // ── Topic status change ───────────────────────────────────
   async function handleTopicStatusChange(topicId: string, status: TopicStatus) {
-    // Optimistic update
     setUnitTopics(prev => {
       const next = { ...prev }
       for (const unitId in next) {
-        next[unitId] = next[unitId].map(t =>
-          t.id === topicId ? { ...t, status } : t
-        )
+        next[unitId] = next[unitId].map(t => t.id === topicId ? { ...t, status } : t)
       }
       return next
     })
-
     await supabase
       .from('topics')
       .update({ status, last_studied: new Date().toISOString() })
       .eq('id', topicId)
   }
 
+  // ── Add unit ──────────────────────────────────────────────
+  async function addUnit() {
+    if (!newUnitName.trim()) return
+    setAddingUnit(true)
+    try {
+      const maxOrder = localUnits.reduce((m, u) => Math.max(m, u.order_index), -1)
+      const { data, error } = await supabase
+        .from('units')
+        .insert({ subject_id: subject.id, name: newUnitName.trim(), order_index: maxOrder + 1 })
+        .select()
+        .single()
+      if (!error && data) {
+        setLocalUnits(prev => [...prev, { id: data.id, name: data.name, order_index: data.order_index }])
+        setUnitTopics(prev => ({ ...prev, [data.id]: [] }))
+        setNewUnitName('')
+        setShowAddUnit(false)
+      }
+    } finally {
+      setAddingUnit(false)
+    }
+  }
+
+  // ── Add topic ─────────────────────────────────────────────
+  async function addTopic(unitId: string) {
+    if (!newTopicName.trim()) return
+    setAddingTopic(true)
+    try {
+      const { data, error } = await supabase
+        .from('topics')
+        .insert({ unit_id: unitId, name: newTopicName.trim(), full_description: '', status: 'red' })
+        .select()
+        .single()
+      if (!error && data) {
+        setUnitTopics(prev => ({ ...prev, [unitId]: [...(prev[unitId] || []), data] }))
+        setNewTopicName('')
+        setAddingTopicForUnit(null)
+      }
+    } finally {
+      setAddingTopic(false)
+    }
+  }
+
+  // ── Class log ─────────────────────────────────────────────
   async function saveClassLog() {
     setLogLoading(true)
     try {
@@ -81,46 +135,49 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
         homework_description: classLogData.has_homework ? classLogData.homework_description : null,
       })
       if (!error) setShowClassLog(false)
-    } catch (err) {
-      console.error(err)
     } finally {
       setLogLoading(false)
     }
   }
 
+  // ── Academic event ────────────────────────────────────────
   async function saveEvent() {
     setEventLoading(true)
     try {
-      const { data, error } = await supabase.from('academic_events').insert({
-        subject_id: subject.id,
-        user_id: userId,
-        ...eventData,
-      }).select().single()
+      const { data, error } = await supabase
+        .from('academic_events')
+        .insert({ subject_id: subject.id, user_id: userId, ...eventData })
+        .select()
+        .single()
       if (!error && data) {
         setLocalEvents(prev => [...prev, data].sort((a, b) => a.date.localeCompare(b.date)))
         setShowEventForm(false)
         setEventData({ type: 'parcial', title: '', date: '', notes: '' })
       }
-    } catch (err) {
-      console.error(err)
     } finally {
       setEventLoading(false)
     }
   }
 
-  // Calculate overall progress
-  const allTopics = Object.values(unitTopics).flat()
-  const total = allTopics.length
-  const greenCount = allTopics.filter(t => t.status === 'green').length
-  const pct = total > 0 ? Math.round((greenCount / total) * 100) : 0
+  // ── Computed stats ────────────────────────────────────────
+  const allTopics    = Object.values(unitTopics).flat()
+  const total        = allTopics.length
+  const greenCount   = allTopics.filter(t => t.status === 'green').length
+  const pct          = total > 0 ? Math.round((greenCount / total) * 100) : 0
+  const upcomingEvts = localEvents.filter(e => e.date >= today)
 
-  const upcomingEvents = localEvents.filter(e => e.date >= today)
+  // ── Shared input classes ──────────────────────────────────
+  const inlineInput = 'flex-1 h-9 px-3 rounded-xl bg-surface-2 border border-border-subtle text-sm text-text-primary placeholder-text-secondary focus:outline-none focus:border-primary/60'
 
   return (
     <div className="px-4 pt-6 pb-4 space-y-5 max-w-lg mx-auto">
+
       {/* Header */}
       <div className="flex items-center gap-3">
-        <Link href="/subjects" className="w-9 h-9 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary hover:text-text-primary transition-colors">
+        <Link
+          href="/subjects"
+          className="w-9 h-9 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary hover:text-text-primary transition-colors"
+        >
           ←
         </Link>
         <div className="flex-1 min-w-0">
@@ -166,12 +223,12 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
       </div>
 
       {/* Upcoming events */}
-      {upcomingEvents.length > 0 && (
+      {upcomingEvts.length > 0 && (
         <div>
           <h2 className="text-sm font-semibold text-text-primary mb-2">Fechas importantes</h2>
           <div className="space-y-2">
-            {upcomingEvents.map(event => {
-              const days = differenceInDays(parseISO(event.date), new Date())
+            {upcomingEvts.map(event => {
+              const days  = differenceInDays(parseISO(event.date), new Date())
               const color = getDaysColor(days)
               return (
                 <div key={event.id} className="flex items-center gap-3 p-3 rounded-2xl bg-surface border border-border-subtle">
@@ -193,16 +250,71 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
         </div>
       )}
 
-      {/* Units and topics */}
+      {/* ── Temario (units + topics) ──────────────────────────── */}
       <div className="space-y-4">
-        <h2 className="text-sm font-semibold text-text-primary">Temario</h2>
-        <p className="text-xs text-text-secondary -mt-2">Tocá un tema para cambiar su estado → 🔴 → 🟡 → 🟢</p>
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-text-primary">Temario</h2>
+          {total > 0 && (
+            <p className="text-xs text-text-secondary">Tocá un tema → 🔴 → 🟡 → 🟢</p>
+          )}
+        </div>
 
-        {subject.units.map(unit => (
+        {localUnits.length === 0 && (
+          <p className="text-xs text-text-secondary text-center py-4">
+            Aún no hay unidades. Agregá la primera para empezar a organizar los temas.
+          </p>
+        )}
+
+        {localUnits.map(unit => (
           <div key={unit.id}>
-            <p className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2">
-              {unit.name}
-            </p>
+            {/* Unit header */}
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
+                {unit.name}
+              </p>
+              <button
+                onClick={() => {
+                  setAddingTopicForUnit(unit.id)
+                  setNewTopicName('')
+                }}
+                className="text-xs text-primary hover:text-primary/80 transition-colors px-1 min-h-[28px]"
+              >
+                + Tema
+              </button>
+            </div>
+
+            {/* Inline add topic */}
+            {addingTopicForUnit === unit.id && (
+              <div className="flex gap-2 mb-2">
+                <input
+                  type="text"
+                  value={newTopicName}
+                  onChange={e => setNewTopicName(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') addTopic(unit.id)
+                    if (e.key === 'Escape') { setAddingTopicForUnit(null); setNewTopicName('') }
+                  }}
+                  placeholder="Nombre del tema (ej: Proteínas, Recursividad…)"
+                  autoFocus
+                  className={inlineInput}
+                />
+                <button
+                  onClick={() => addTopic(unit.id)}
+                  disabled={!newTopicName.trim() || addingTopic}
+                  className="w-9 h-9 flex items-center justify-center rounded-xl bg-primary text-white text-sm font-medium disabled:opacity-40"
+                >
+                  {addingTopic ? '…' : '✓'}
+                </button>
+                <button
+                  onClick={() => { setAddingTopicForUnit(null); setNewTopicName('') }}
+                  className="w-9 h-9 flex items-center justify-center rounded-xl bg-surface-2 text-text-secondary"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+
+            {/* Topic pills */}
             <div className="flex flex-wrap gap-2">
               {(unitTopics[unit.id] || []).map(topic => (
                 <TopicPill
@@ -212,18 +324,64 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
                   compact
                 />
               ))}
+              {(unitTopics[unit.id] || []).length === 0 && addingTopicForUnit !== unit.id && (
+                <p className="text-xs text-text-secondary italic">Sin temas — usá "+ Tema" para agregar</p>
+              )}
             </div>
           </div>
         ))}
+
+        {/* Add unit */}
+        {showAddUnit ? (
+          <div className="flex gap-2 mt-2">
+            <input
+              type="text"
+              value={newUnitName}
+              onChange={e => setNewUnitName(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') addUnit()
+                if (e.key === 'Escape') { setShowAddUnit(false); setNewUnitName('') }
+              }}
+              placeholder="Nombre de la unidad (ej: Unidad 1 — Introducción)"
+              autoFocus
+              className={inlineInput}
+            />
+            <button
+              onClick={addUnit}
+              disabled={!newUnitName.trim() || addingUnit}
+              className="w-9 h-9 flex items-center justify-center rounded-xl bg-primary text-white text-sm font-medium disabled:opacity-40"
+            >
+              {addingUnit ? '…' : '✓'}
+            </button>
+            <button
+              onClick={() => { setShowAddUnit(false); setNewUnitName('') }}
+              className="w-9 h-9 flex items-center justify-center rounded-xl bg-surface-2 text-text-secondary"
+            >
+              ✕
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setShowAddUnit(true)}
+            className="w-full py-3 rounded-xl border border-dashed border-border-subtle text-text-secondary text-sm hover:border-primary/50 hover:text-primary transition-colors"
+          >
+            + Agregar unidad
+          </button>
+        )}
       </div>
 
-      {/* Class log modal */}
+      {/* ── Class log modal ──────────────────────────────────── */}
       {showClassLog && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center p-4 bg-black/60 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-end justify-center px-4 pt-4 pb-24 bg-black/60 backdrop-blur-sm">
           <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-3xl p-5 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-semibold text-text-primary">📝 Registro post-clase</h3>
-              <button onClick={() => setShowClassLog(false)} className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary">✕</button>
+              <button
+                onClick={() => setShowClassLog(false)}
+                className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary"
+              >
+                ✕
+              </button>
             </div>
 
             <EmojiSelector
@@ -262,20 +420,29 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
             </div>
 
             <div className="flex gap-3 mt-4">
-              <Button variant="secondary" className="flex-1" onClick={() => setShowClassLog(false)}>Cancelar</Button>
-              <Button variant="primary" className="flex-1" onClick={saveClassLog} loading={logLoading}>Guardar</Button>
+              <Button variant="secondary" className="flex-1" onClick={() => setShowClassLog(false)}>
+                Cancelar
+              </Button>
+              <Button variant="primary" className="flex-1" onClick={saveClassLog} loading={logLoading}>
+                Guardar
+              </Button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Event form modal */}
+      {/* ── Event form modal ─────────────────────────────────── */}
       {showEventForm && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center p-4 bg-black/60 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-end justify-center px-4 pt-4 pb-24 bg-black/60 backdrop-blur-sm">
           <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-3xl p-5 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-semibold text-text-primary">📅 Nueva fecha importante</h3>
-              <button onClick={() => setShowEventForm(false)} className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary">✕</button>
+              <button
+                onClick={() => setShowEventForm(false)}
+                className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary"
+              >
+                ✕
+              </button>
             </div>
 
             <div className="space-y-3">
@@ -326,7 +493,9 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
             </div>
 
             <div className="flex gap-3 mt-4">
-              <Button variant="secondary" className="flex-1" onClick={() => setShowEventForm(false)}>Cancelar</Button>
+              <Button variant="secondary" className="flex-1" onClick={() => setShowEventForm(false)}>
+                Cancelar
+              </Button>
               <Button
                 variant="primary"
                 className="flex-1"
