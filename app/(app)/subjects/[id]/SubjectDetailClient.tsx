@@ -34,6 +34,10 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
     subject.units.map(u => ({ id: u.id, name: u.name, order_index: u.order_index }))
   )
 
+  // ── Class logs (local state for CRUD) ─────────────────────
+  const [localClassLogs, setLocalClassLogs] = useState<any[]>(classLogs)
+  const [editingLogId, setEditingLogId] = useState<string | null>(null)
+
   // ── Add unit ──────────────────────────────────────────────
   const [showAddUnit, setShowAddUnit] = useState(false)
   const [newUnitName, setNewUnitName] = useState('')
@@ -50,7 +54,8 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
     understanding_level: 3,
     has_homework: false,
     homework_description: '',
-    topics_covered: [] as string[], // topic IDs seen in class
+    due_date: '',
+    topics_covered: [] as string[],
   })
   const [logLoading, setLogLoading] = useState(false)
 
@@ -69,6 +74,9 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
   })
   const [eventLoading, setEventLoading] = useState(false)
   const [localEvents, setLocalEvents] = useState<AcademicEvent[]>(events)
+
+  // ── Events accordion ──────────────────────────────────────
+  const [showAllEvents, setShowAllEvents] = useState(false)
 
   // ── Topic status change ───────────────────────────────────
   async function handleTopicStatusChange(topicId: string, status: TopicStatus) {
@@ -139,7 +147,6 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
         .single()
       if (!error && data) {
         setUnitTopics(prev => ({ ...prev, [unitId]: [...(prev[unitId] || []), data] }))
-        // Auto-select the newly created topic
         setClassLogData(d => ({ ...d, topics_covered: [...d.topics_covered, data.id] }))
         setQuickTopicName('')
         setQuickAddUnitId(null)
@@ -158,11 +165,29 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
     }))
   }
 
-  // ── Class log ─────────────────────────────────────────────
+  // ── Open class log modal (create or edit) ─────────────────
+  function openClassLog(log?: any) {
+    if (log) {
+      setEditingLogId(log.id)
+      setClassLogData({
+        understanding_level: log.understanding_level,
+        has_homework: log.has_homework,
+        homework_description: log.homework_description || '',
+        due_date: log.due_date || '',
+        topics_covered: log.topics_covered_json || [],
+      })
+    } else {
+      setEditingLogId(null)
+      setClassLogData({ understanding_level: 3, has_homework: false, homework_description: '', due_date: '', topics_covered: [] })
+    }
+    setShowClassLog(true)
+  }
+
+  // ── Class log save (create or update) ─────────────────────
   async function saveClassLog() {
     setLogLoading(true)
     try {
-      const { error } = await supabase.from('class_logs').insert({
+      const payload = {
         user_id: userId,
         subject_id: subject.id,
         date: today,
@@ -170,37 +195,87 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
         understanding_level: classLogData.understanding_level,
         has_homework: classLogData.has_homework,
         homework_description: classLogData.has_homework ? classLogData.homework_description : null,
-      })
-      if (!error) {
-        // Auto-promote covered topics from 'red' → 'yellow' (seen in class = at least partially known)
-        const redCoveredIds = classLogData.topics_covered.filter(id => {
-          for (const topics of Object.values(unitTopics)) {
-            const t = topics.find(t => t.id === id)
-            if (t && t.status === 'red') return true
-          }
-          return false
-        })
-        if (redCoveredIds.length > 0) {
-          await supabase
-            .from('topics')
-            .update({ status: 'yellow', last_studied: new Date().toISOString() })
-            .in('id', redCoveredIds)
-          setUnitTopics(prev => {
-            const next = { ...prev }
-            for (const unitId in next) {
-              next[unitId] = next[unitId].map(t =>
-                redCoveredIds.includes(t.id) ? { ...t, status: 'yellow' as TopicStatus } : t
-              )
-            }
-            return next
-          })
-        }
-        setShowClassLog(false)
-        setClassLogData({ understanding_level: 3, has_homework: false, homework_description: '', topics_covered: [] })
+        due_date: classLogData.has_homework && classLogData.due_date ? classLogData.due_date : null,
       }
+
+      if (editingLogId) {
+        // UPDATE existing log
+        const { data, error } = await supabase
+          .from('class_logs')
+          .update(payload)
+          .eq('id', editingLogId)
+          .select()
+          .single()
+        if (!error && data) {
+          setLocalClassLogs(prev => prev.map(l => l.id === editingLogId ? data : l))
+        }
+      } else {
+        // INSERT new log
+        const { data, error } = await supabase
+          .from('class_logs')
+          .insert(payload)
+          .select()
+          .single()
+        if (!error && data) {
+          setLocalClassLogs(prev => [data, ...prev])
+
+          // Auto-promote covered topics from 'red' → 'yellow'
+          const redCoveredIds = classLogData.topics_covered.filter(id => {
+            for (const topics of Object.values(unitTopics)) {
+              const t = topics.find(t => t.id === id)
+              if (t && t.status === 'red') return true
+            }
+            return false
+          })
+          if (redCoveredIds.length > 0) {
+            await supabase
+              .from('topics')
+              .update({ status: 'yellow', last_studied: new Date().toISOString() })
+              .in('id', redCoveredIds)
+            setUnitTopics(prev => {
+              const next = { ...prev }
+              for (const unitId in next) {
+                next[unitId] = next[unitId].map(t =>
+                  redCoveredIds.includes(t.id) ? { ...t, status: 'yellow' as TopicStatus } : t
+                )
+              }
+              return next
+            })
+          }
+        }
+      }
+
+      // Auto-create academic_event for homework with due_date
+      if (classLogData.has_homework && classLogData.due_date && !editingLogId) {
+        const { data: newEvent, error: evErr } = await supabase
+          .from('academic_events')
+          .insert({
+            subject_id: subject.id,
+            user_id: userId,
+            type: 'entrega_tp' as AcademicEventType,
+            title: classLogData.homework_description.trim() || 'Entrega TP',
+            date: classLogData.due_date,
+            notes: null,
+          })
+          .select()
+          .single()
+        if (!evErr && newEvent) {
+          setLocalEvents(prev => [...prev, newEvent].sort((a, b) => a.date.localeCompare(b.date)))
+        }
+      }
+
+      setShowClassLog(false)
+      setEditingLogId(null)
+      setClassLogData({ understanding_level: 3, has_homework: false, homework_description: '', due_date: '', topics_covered: [] })
     } finally {
       setLogLoading(false)
     }
+  }
+
+  // ── Delete class log ──────────────────────────────────────
+  async function deleteClassLog(id: string) {
+    await supabase.from('class_logs').delete().eq('id', id)
+    setLocalClassLogs(prev => prev.filter(l => l.id !== id))
   }
 
   // ── Academic event ────────────────────────────────────────
@@ -228,6 +303,9 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
   const greenCount   = allTopics.filter(t => t.status === 'green').length
   const pct          = total > 0 ? Math.round((greenCount / total) * 100) : 0
   const upcomingEvts = localEvents.filter(e => e.date >= today)
+
+  // Events accordion: show first 2 by default
+  const visibleEvents = showAllEvents ? upcomingEvts : upcomingEvts.slice(0, 2)
 
   // ── Shared input classes ──────────────────────────────────
   const inlineInput = 'flex-1 h-9 px-3 rounded-xl bg-surface-2 border border-border-subtle text-sm text-text-primary placeholder-text-secondary focus:outline-none focus:border-primary/60'
@@ -278,7 +356,7 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
 
       {/* Actions */}
       <div className="flex gap-3">
-        <Button variant="secondary" size="md" className="flex-1" onClick={() => setShowClassLog(true)}>
+        <Button variant="secondary" size="md" className="flex-1" onClick={() => openClassLog()}>
           📝 Post-clase
         </Button>
         <Button variant="secondary" size="md" className="flex-1" onClick={() => setShowEventForm(true)}>
@@ -286,12 +364,61 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
         </Button>
       </div>
 
-      {/* Upcoming events */}
+      {/* ── Class log history ─────────────────────────────────── */}
+      {localClassLogs.length > 0 && (
+        <div>
+          <h2 className="text-sm font-semibold text-text-primary mb-2">Historial de clases</h2>
+          <div className="space-y-2">
+            {localClassLogs.map(log => (
+              <div key={log.id} className="flex items-center gap-3 p-3 rounded-2xl bg-surface border border-border-subtle">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-text-secondary">
+                      {format(parseISO(log.date), 'dd/MM')}
+                    </span>
+                    <span className="text-sm">
+                      {['😕','😐','🙂','😊','🤩'][log.understanding_level - 1]}
+                    </span>
+                    {log.has_homework && (
+                      <span className="text-xs bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded-full">
+                        📄 Tarea{log.due_date ? ` — ${format(parseISO(log.due_date), 'dd/MM')}` : ''}
+                      </span>
+                    )}
+                  </div>
+                  {log.topics_covered_json?.length > 0 && (
+                    <p className="text-xs text-text-secondary mt-0.5 truncate">
+                      {log.topics_covered_json.length} tema{log.topics_covered_json.length !== 1 ? 's' : ''} vistos
+                    </p>
+                  )}
+                </div>
+                <div className="flex gap-1 shrink-0">
+                  <button
+                    onClick={() => openClassLog(log)}
+                    className="w-8 h-8 flex items-center justify-center rounded-xl bg-surface-2 text-text-secondary hover:text-text-primary transition-colors text-sm"
+                    title="Editar"
+                  >
+                    ✎
+                  </button>
+                  <button
+                    onClick={() => deleteClassLog(log.id)}
+                    className="w-8 h-8 flex items-center justify-center rounded-xl bg-red-500/10 text-red-400 hover:text-red-300 transition-colors text-sm"
+                    title="Eliminar"
+                  >
+                    🗑
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Upcoming events (with accordion) */}
       {upcomingEvts.length > 0 && (
         <div>
           <h2 className="text-sm font-semibold text-text-primary mb-2">Fechas importantes</h2>
           <div className="space-y-2">
-            {upcomingEvts.map(event => {
+            {visibleEvents.map(event => {
               const days  = differenceInDays(parseISO(event.date), new Date())
               const color = getDaysColor(days)
               return (
@@ -311,6 +438,17 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
               )
             })}
           </div>
+          {/* Accordion toggle */}
+          {upcomingEvts.length > 2 && (
+            <button
+              onClick={() => setShowAllEvents(e => !e)}
+              className="mt-2 w-full py-2 text-xs text-text-secondary hover:text-text-primary transition-colors"
+            >
+              {showAllEvents
+                ? '▲ Ver menos'
+                : `▼ Ver todas (${upcomingEvts.length})`}
+            </button>
+          )}
         </div>
       )}
 
@@ -422,15 +560,17 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
         )}
       </div>
 
-      {/* ── Class log modal ──────────────────────────────────── */}
+      {/* ── Class log modal (create / edit) ──────────────────── */}
       {showClassLog && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm">
           <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-t-3xl shadow-2xl max-h-[88dvh] overflow-y-auto">
             <div className="p-5 pb-28">
               <div className="flex items-center justify-between mb-5">
-                <h3 className="text-base font-semibold text-text-primary">📝 Registro post-clase</h3>
+                <h3 className="text-base font-semibold text-text-primary">
+                  {editingLogId ? '✎ Editar registro' : '📝 Registro post-clase'}
+                </h3>
                 <button
-                  onClick={() => setShowClassLog(false)}
+                  onClick={() => { setShowClassLog(false); setEditingLogId(null) }}
                   className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary"
                 >
                   ✕
@@ -442,7 +582,6 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
                 <p className="text-sm font-medium text-text-primary mb-2">Temas vistos en clase</p>
 
                 {allTopics.length === 0 ? (
-                  /* No topics at all — guide user */
                   <div className="p-3 rounded-2xl bg-surface-2 border border-border-subtle">
                     <p className="text-xs text-text-secondary mb-2">
                       Aún no hay temas en el temario. Podés agregar uno ahora:
@@ -482,7 +621,6 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
                     )}
                   </div>
                 ) : (
-                  /* Topics grouped by unit */
                   <div className="space-y-4">
                     {localUnits.map(unit => {
                       const topics = unitTopics[unit.id] || []
@@ -492,7 +630,6 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
                             <p className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
                               {unit.name}
                             </p>
-                            {/* Quick add topic within modal */}
                             {quickAddUnitId === unit.id ? (
                               <div className="flex gap-1 items-center">
                                 <input
@@ -595,21 +732,34 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
                 </div>
 
                 {classLogData.has_homework && (
-                  <textarea
-                    value={classLogData.homework_description}
-                    onChange={e => setClassLogData(d => ({ ...d, homework_description: e.target.value }))}
-                    placeholder="Describí la tarea..."
-                    className="w-full h-20 px-4 py-3 rounded-2xl bg-surface-2 border border-border-subtle text-sm text-text-primary placeholder-text-secondary resize-none focus:outline-none focus:border-primary/60"
-                  />
+                  <div className="space-y-2">
+                    <textarea
+                      value={classLogData.homework_description}
+                      onChange={e => setClassLogData(d => ({ ...d, homework_description: e.target.value }))}
+                      placeholder="Describí la tarea..."
+                      className="w-full h-20 px-4 py-3 rounded-2xl bg-surface-2 border border-border-subtle text-sm text-text-primary placeholder-text-secondary resize-none focus:outline-none focus:border-primary/60"
+                    />
+                    <div>
+                      <p className="text-xs text-text-secondary mb-1.5">
+                        Fecha de entrega <span className="text-primary/70">(crea evento automáticamente)</span>
+                      </p>
+                      <input
+                        type="date"
+                        value={classLogData.due_date}
+                        onChange={e => setClassLogData(d => ({ ...d, due_date: e.target.value }))}
+                        className={modalInput}
+                      />
+                    </div>
+                  </div>
                 )}
               </div>
 
               <div className="flex gap-3 mt-5">
-                <Button variant="secondary" className="flex-1" onClick={() => setShowClassLog(false)}>
+                <Button variant="secondary" className="flex-1" onClick={() => { setShowClassLog(false); setEditingLogId(null) }}>
                   Cancelar
                 </Button>
                 <Button variant="primary" className="flex-1" onClick={saveClassLog} loading={logLoading}>
-                  Guardar registro
+                  {editingLogId ? 'Guardar cambios' : 'Guardar registro'}
                 </Button>
               </div>
             </div>

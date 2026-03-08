@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { format, parseISO, differenceInDays } from 'date-fns'
 import { es } from 'date-fns/locale'
+import { createClient } from '@/lib/supabase'
 import { Card, CardHeader, CardTitle } from '@/components/ui/Card'
 import { TimeBlock } from '@/components/ui/TimeBlock'
 import { Badge } from '@/components/ui/Badge'
@@ -14,6 +15,11 @@ import NotificationBanner from '@/components/features/NotificationBanner'
 import { getGreeting, stressLabel } from '@/lib/utils'
 import { getDaysColor as getColor } from '@/lib/study-priority'
 import type { CheckIn, DailyPlan, TimeBlock as TimeBlockType, AppNotification } from '@/types'
+
+// ── Subject/unit/topic hierarchy for the edit modal ──────────────────────────
+interface TopicOption { id: string; name: string; status: string }
+interface UnitOption  { id: string; name: string; topics: TopicOption[] }
+interface SubjectOption { id: string; name: string; color: string; units: UnitOption[] }
 
 interface Props {
   user: { id: string; email?: string }
@@ -25,6 +31,8 @@ interface Props {
   previewBlocks?: TimeBlockType[]
   /** Passed from page.tsx searchParams: 'replan' triggers auto-replan on mount */
   actionParam?: string
+  /** Subjects with units+topics for block editing */
+  subjectsData?: SubjectOption[]
 }
 
 export default function TodayClient({
@@ -36,15 +44,26 @@ export default function TodayClient({
   today,
   previewBlocks = [],
   actionParam,
+  subjectsData = [],
 }: Props) {
   const router = useRouter()
+  const supabase = createClient()
 
   const [blocks, setBlocks] = useState<TimeBlockType[]>(plan?.plan_json || [])
   const [generating, setGenerating] = useState(false)
   const [completion, setCompletion] = useState(plan?.completion_percentage || 0)
   const [notifications, setNotifications] = useState<AppNotification[]>([])
 
-  const greeting = getGreeting()
+  // ── Block editing state ───────────────────────────────────────────────────
+  const [blockMenuId, setBlockMenuId]   = useState<string | null>(null)
+  const [editingBlock, setEditingBlock] = useState<TimeBlockType | null>(null)
+  const [editSubjectId, setEditSubjectId] = useState('')
+  const [editTopicId, setEditTopicId]   = useState('')
+  const [editTitle, setEditTitle]       = useState('')
+  const [editDesc, setEditDesc]         = useState('')
+  const [savingEdit, setSavingEdit]     = useState(false)
+
+  const greeting  = getGreeting()
   const dateLabel = format(parseISO(today), "EEEE d 'de' MMMM", { locale: es })
 
   // ── Fetch & process notifications once on mount ───────────────────────────
@@ -83,27 +102,33 @@ export default function TodayClient({
     }
   }, [])
 
-  // Called when user clicks the action button (e.g. "Ver materia", "Replanificar")
   const handleNotificationAction = useCallback(async (id: string, targetPath: string | null) => {
     const serverPath = await markRead(id)
     const destination = serverPath ?? targetPath
-
     if (!destination) return
-
-    // Energy boost: replan in-place — no need to navigate away
     if (destination === '/today?action=replan') {
       await handleReplan()
       return
     }
-
     router.push(destination)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [markRead, router])
 
-  // Called when user clicks ✕ (dismiss without action)
   const handleNotificationDismiss = useCallback(async (id: string) => {
     await markRead(id)
   }, [markRead])
+
+  // ── Persist blocks to DB ──────────────────────────────────────────────────
+  async function persistBlocks(updated: TimeBlockType[]) {
+    const completedCount = updated.filter(b => b.completed).length
+    const pct = updated.length > 0 ? Math.round((completedCount / updated.length) * 100) : 0
+    setCompletion(pct)
+    await fetch('/api/plan/update-block', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date: today, blocks: updated, completion_percentage: pct }),
+    })
+  }
 
   // ── Generate plan ─────────────────────────────────────────────────────────
   async function generatePlan() {
@@ -145,17 +170,77 @@ export default function TodayClient({
   async function toggleBlock(id: string, completed: boolean) {
     const updated = blocks.map(b => b.id === id ? { ...b, completed } : b)
     setBlocks(updated)
-
-    const completedCount = updated.filter(b => b.completed).length
-    const pct = updated.length > 0 ? Math.round((completedCount / updated.length) * 100) : 0
-    setCompletion(pct)
-
-    await fetch('/api/plan/update-block', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ date: today, blocks: updated, completion_percentage: pct }),
-    })
+    await persistBlocks(updated)
   }
+
+  // ── Delete block ──────────────────────────────────────────────────────────
+  async function deleteBlock(id: string) {
+    const updated = blocks.filter(b => b.id !== id)
+    setBlocks(updated)
+    setBlockMenuId(null)
+    await persistBlocks(updated)
+  }
+
+  // ── Move block up/down ────────────────────────────────────────────────────
+  async function moveBlock(id: string, direction: 'up' | 'down') {
+    const idx = blocks.findIndex(b => b.id === id)
+    if (idx < 0) return
+    if (direction === 'up'   && idx === 0) return
+    if (direction === 'down' && idx === blocks.length - 1) return
+
+    const updated = [...blocks]
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1
+    ;[updated[idx], updated[swapIdx]] = [updated[swapIdx], updated[idx]]
+    setBlocks(updated)
+    setBlockMenuId(null)
+    await persistBlocks(updated)
+  }
+
+  // ── Open edit modal ───────────────────────────────────────────────────────
+  function openEdit(block: TimeBlockType) {
+    setEditingBlock(block)
+    setEditTitle(block.title)
+    setEditDesc(block.description)
+    setEditSubjectId(block.subject_id || '')
+    setEditTopicId(block.topic_id || '')
+    setBlockMenuId(null)
+  }
+
+  // ── Save edited block ─────────────────────────────────────────────────────
+  async function saveEditedBlock() {
+    if (!editingBlock) return
+    setSavingEdit(true)
+    try {
+      const topicChanged = editTopicId !== (editingBlock.topic_id || '')
+
+      const updated = blocks.map(b =>
+        b.id === editingBlock.id
+          ? { ...b, title: editTitle, description: editDesc, subject_id: editSubjectId || undefined, topic_id: editTopicId || undefined }
+          : b
+      )
+      setBlocks(updated)
+      await persistBlocks(updated)
+
+      // Sync topic status in DB when the topic assignment changes on a study block
+      if (topicChanged && editTopicId && editingBlock.type === 'study') {
+        await supabase
+          .from('topics')
+          .update({ last_studied: new Date().toISOString(), status: 'yellow' })
+          .eq('id', editTopicId)
+          .eq('status', 'red') // only promote from red → yellow, don't demote green
+      }
+
+      setEditingBlock(null)
+    } finally {
+      setSavingEdit(false)
+    }
+  }
+
+  // ── Derived subjects/units/topics for dropdowns ───────────────────────────
+  const selectedSubjectUnits = subjectsData.find(s => s.id === editSubjectId)?.units ?? []
+  const selectedUnitTopics   = selectedSubjectUnits.find(u => u.topics.some(t => t.id === editTopicId))?.topics
+    ?? selectedSubjectUnits[0]?.topics
+    ?? []
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -283,11 +368,56 @@ export default function TodayClient({
           ) : (
             <div className="space-y-2">
               {blocks.map(block => (
-                <TimeBlock
-                  key={block.id}
-                  block={block}
-                  onToggle={toggleBlock}
-                />
+                <div key={block.id} className="relative">
+                  {/* Block row with ⋮ menu button */}
+                  <div className="flex items-stretch gap-1">
+                    {/* ⋮ button */}
+                    <button
+                      onClick={() => setBlockMenuId(prev => prev === block.id ? null : block.id)}
+                      className="w-7 shrink-0 flex items-center justify-center rounded-xl text-text-secondary hover:text-text-primary hover:bg-surface-2 transition-colors text-base"
+                      aria-label="Opciones del bloque"
+                    >
+                      ⋮
+                    </button>
+                    {/* TimeBlock takes remaining space */}
+                    <div className="flex-1 min-w-0">
+                      <TimeBlock
+                        block={block}
+                        onToggle={toggleBlock}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Action row — appears below when ⋮ is tapped */}
+                  {blockMenuId === block.id && (
+                    <div className="flex gap-2 mt-1 ml-8 animate-in slide-in-from-top-1 duration-150">
+                      <button
+                        onClick={() => moveBlock(block.id, 'up')}
+                        className="flex-1 py-1.5 rounded-xl bg-surface-2 border border-border-subtle text-xs text-text-secondary hover:text-text-primary transition-colors min-h-[36px]"
+                      >
+                        ↑ Subir
+                      </button>
+                      <button
+                        onClick={() => moveBlock(block.id, 'down')}
+                        className="flex-1 py-1.5 rounded-xl bg-surface-2 border border-border-subtle text-xs text-text-secondary hover:text-text-primary transition-colors min-h-[36px]"
+                      >
+                        ↓ Bajar
+                      </button>
+                      <button
+                        onClick={() => openEdit(block)}
+                        className="flex-1 py-1.5 rounded-xl bg-surface-2 border border-border-subtle text-xs text-text-secondary hover:text-text-primary transition-colors min-h-[36px]"
+                      >
+                        ✎ Editar
+                      </button>
+                      <button
+                        onClick={() => deleteBlock(block.id)}
+                        className="flex-1 py-1.5 rounded-xl bg-red-500/10 border border-red-500/20 text-xs text-red-400 hover:text-red-300 transition-colors min-h-[36px]"
+                      >
+                        🗑 Borrar
+                      </button>
+                    </div>
+                  )}
+                </div>
               ))}
 
               <Button
@@ -332,38 +462,105 @@ export default function TodayClient({
         </div>
       )}
 
-      {/* Energy sparkline */}
-      {energyHistory.length > 1 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Energía esta semana ⚡</CardTitle>
-          </CardHeader>
-          <div className="flex items-end gap-1 h-10">
-            {[...energyHistory].reverse().map((h, i) => (
-              <div key={i} className="flex-1 flex flex-col items-center gap-0.5">
-                <div
-                  className="w-full rounded-t bg-primary/60"
-                  style={{ height: `${(h.energy_level / 5) * 100}%`, minHeight: 4 }}
+      {/* ── Edit block modal (bottom-sheet) ──────────────────────────────────── */}
+      {editingBlock && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center px-4 pt-4 pb-24 bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-3xl p-5 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-semibold text-text-primary">✎ Editar bloque</h3>
+              <button
+                onClick={() => setEditingBlock(null)}
+                className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {/* Title */}
+              <div>
+                <p className="text-xs text-text-secondary mb-1.5">Título</p>
+                <input
+                  type="text"
+                  value={editTitle}
+                  onChange={e => setEditTitle(e.target.value)}
+                  className="w-full h-11 px-4 rounded-2xl bg-surface-2 border border-border-subtle text-sm text-text-primary placeholder-text-secondary focus:outline-none focus:border-primary/60"
                 />
               </div>
-            ))}
-          </div>
-          <div className="flex justify-between mt-1">
-            {[...energyHistory].reverse().map((h, i) => (
-              <span key={i} className="flex-1 text-center text-[9px] text-text-secondary">
-                {format(parseISO(h.date), 'EEE', { locale: es }).slice(0, 2)}
-              </span>
-            ))}
-          </div>
-        </Card>
-      )}
 
-      {/* Settings shortcut */}
-      <div className="flex justify-end">
-        <Link href="/settings" className="text-sm text-text-secondary hover:text-text-primary transition-colors">
-          ⚙️ Configuración
-        </Link>
-      </div>
+              {/* Description */}
+              <div>
+                <p className="text-xs text-text-secondary mb-1.5">Descripción</p>
+                <textarea
+                  value={editDesc}
+                  onChange={e => setEditDesc(e.target.value)}
+                  rows={2}
+                  className="w-full px-4 py-3 rounded-2xl bg-surface-2 border border-border-subtle text-sm text-text-primary placeholder-text-secondary resize-none focus:outline-none focus:border-primary/60"
+                />
+              </div>
+
+              {/* Subject selector (only for study blocks) */}
+              {editingBlock.type === 'study' && subjectsData.length > 0 && (
+                <>
+                  <div>
+                    <p className="text-xs text-text-secondary mb-1.5">Materia</p>
+                    <select
+                      value={editSubjectId}
+                      onChange={e => { setEditSubjectId(e.target.value); setEditTopicId('') }}
+                      className="w-full h-11 px-4 rounded-2xl bg-surface-2 border border-border-subtle text-sm text-text-primary focus:outline-none focus:border-primary/60"
+                    >
+                      <option value="">— Sin materia —</option>
+                      {subjectsData.map(s => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {editSubjectId && selectedSubjectUnits.length > 0 && (
+                    <div>
+                      <p className="text-xs text-text-secondary mb-1.5">
+                        Tema{' '}
+                        <span className="text-primary/70">(actualiza progreso automáticamente)</span>
+                      </p>
+                      <select
+                        value={editTopicId}
+                        onChange={e => setEditTopicId(e.target.value)}
+                        className="w-full h-11 px-4 rounded-2xl bg-surface-2 border border-border-subtle text-sm text-text-primary focus:outline-none focus:border-primary/60"
+                      >
+                        <option value="">— Sin tema específico —</option>
+                        {selectedSubjectUnits.map(unit => (
+                          <optgroup key={unit.id} label={unit.name}>
+                            {unit.topics.map(t => (
+                              <option key={t.id} value={t.id}>
+                                {t.status === 'green' ? '🟢' : t.status === 'yellow' ? '🟡' : '🔴'} {t.name}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            <div className="flex gap-3 mt-5">
+              <Button variant="secondary" className="flex-1" onClick={() => setEditingBlock(null)}>
+                Cancelar
+              </Button>
+              <Button
+                variant="primary"
+                className="flex-1"
+                onClick={saveEditedBlock}
+                loading={savingEdit}
+                disabled={!editTitle.trim()}
+              >
+                Guardar cambios
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

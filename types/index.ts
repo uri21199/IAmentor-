@@ -114,6 +114,7 @@ export interface ClassLog {
   understanding_level: number  // 1-5
   has_homework: boolean
   homework_description: string | null
+  due_date: string | null       // added in migrations_v5 — date when homework is due
   created_at: string
 }
 

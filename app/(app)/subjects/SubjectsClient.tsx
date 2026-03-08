@@ -52,6 +52,11 @@ export default function SubjectsClient({
   const [form, setForm] = useState({ name: '', color: '#3B82F6' })
   const [saving, setSaving] = useState(false)
 
+  // ── AI syllabus upload ────────────────────────────────────
+  const [syllabus, setSyllabus] = useState<File | null>(null)
+  const [parsingSyllabus, setParsingSyllabus] = useState(false)
+  const [syllabusResult, setSyllabusResult] = useState<{ units: number; topics: number } | null>(null)
+
   function getProgress(subject: SubjectItem) {
     const allTopics = subject.units.flatMap(u => u.topics)
     const total = allTopics.length
@@ -81,7 +86,30 @@ export default function SubjectsClient({
         setSubjects(prev =>
           [...prev, { ...data, units: [] }].sort((a, b) => a.name.localeCompare(b.name))
         )
+
+        // ── AI syllabus parse (optional) ──────────────────────
+        if (syllabus) {
+          if (syllabus.size > 3_000_000) {
+            console.warn('Syllabus file too large (max 3MB). Skipping AI parse.')
+          } else {
+            setParsingSyllabus(true)
+            try {
+              const fd = new FormData()
+              fd.append('file', syllabus)
+              fd.append('subject_id', data.id)
+              const res = await fetch('/api/ai/parse-syllabus', { method: 'POST', body: fd })
+              if (res.ok) {
+                const result = await res.json()
+                setSyllabusResult(result)
+              }
+            } finally {
+              setParsingSyllabus(false)
+            }
+          }
+        }
+
         setShowNewSubject(false)
+        setSyllabus(null)
         setForm({ name: '', color: '#3B82F6' })
         router.refresh()
       }
@@ -227,6 +255,35 @@ export default function SubjectsClient({
                   <span className="text-sm text-text-primary">{form.name || 'Nombre de la materia'}</span>
                 </div>
               </div>
+
+              {/* ── AI syllabus upload (optional) ───────────────── */}
+              <div>
+                <p className="text-xs text-text-secondary mb-1.5">Temario con IA <span className="text-primary/60">(opcional)</span></p>
+                <label className="flex items-center gap-2 p-3 rounded-2xl border border-dashed border-border-subtle bg-surface-2 cursor-pointer hover:border-primary/50 transition-colors">
+                  <input
+                    type="file"
+                    accept="image/*,.pdf"
+                    onChange={e => {
+                      setSyllabus(e.target.files?.[0] ?? null)
+                      setSyllabusResult(null)
+                    }}
+                    className="hidden"
+                  />
+                  {syllabus ? (
+                    <span className="text-sm text-text-primary truncate">📎 {syllabus.name}</span>
+                  ) : (
+                    <span className="text-sm text-text-secondary">📤 Subir programa/syllabus (imagen o PDF)</span>
+                  )}
+                </label>
+                {syllabusResult && (
+                  <p className="text-xs text-green-400 mt-1.5">
+                    ✅ {syllabusResult.units} unidades y {syllabusResult.topics} temas importados
+                  </p>
+                )}
+                {syllabus && syllabus.size > 3_000_000 && (
+                  <p className="text-xs text-red-400 mt-1.5">⚠️ Archivo demasiado grande (máx 3MB)</p>
+                )}
+              </div>
             </div>
 
             <div className="flex gap-3 mt-5">
@@ -237,10 +294,10 @@ export default function SubjectsClient({
                 variant="primary"
                 className="flex-1"
                 onClick={createSubject}
-                loading={saving}
-                disabled={!form.name.trim()}
+                loading={saving || parsingSyllabus}
+                disabled={!form.name.trim() || (syllabus !== null && syllabus.size > 3_000_000)}
               >
-                Crear materia
+                {parsingSyllabus ? '⏳ Importando temario...' : 'Crear materia'}
               </Button>
             </div>
           </div>

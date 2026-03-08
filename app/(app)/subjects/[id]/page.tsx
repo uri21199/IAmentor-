@@ -2,7 +2,7 @@ import { createServerSupabaseClient } from '@/lib/supabase-server'
 import { redirect, notFound } from 'next/navigation'
 import SubjectDetailClient from './SubjectDetailClient'
 import type { SubjectWithDetails, AcademicEvent } from '@/types'
-import { format } from 'date-fns'
+import { getTodayArg } from '@/lib/utils'
 
 export default async function SubjectDetailPage({ params }: { params: { id: string } }) {
   const supabase = createServerSupabaseClient()
@@ -39,7 +39,8 @@ export default async function SubjectDetailPage({ params }: { params: { id: stri
   }
 
   // Fetch academic events for this subject
-  const today = format(new Date(), 'yyyy-MM-dd')
+  // Use Argentina timezone — Vercel runs UTC, Argentina = UTC-3
+  const today = getTodayArg()
   const { data: events } = await supabase
     .from('academic_events')
     .select('*')

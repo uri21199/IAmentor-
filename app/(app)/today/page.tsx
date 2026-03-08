@@ -34,6 +34,7 @@ export default async function TodayPage({
     { data: plan },
     { data: events },
     { data: energyHistory },
+    { data: subjectsForEdit },
   ] = await Promise.all([
     supabase.from('checkins').select('*').eq('user_id', user.id).eq('date', today).single(),
     supabase.from('daily_plans').select('*').eq('user_id', user.id).eq('date', today).single(),
@@ -42,6 +43,8 @@ export default async function TodayPage({
       .order('date', { ascending: true }).limit(5),
     supabase.from('checkins').select('date, energy_level')
       .eq('user_id', user.id).order('date', { ascending: false }).limit(7),
+    supabase.from('subjects').select('id, name, color, units(id, name, order_index, topics(id, name, status))')
+      .eq('user_id', user.id).order('name'),
   ])
 
   // ── Preview blocks (when no check-in for today) ───────────
@@ -97,6 +100,14 @@ export default async function TodayPage({
     previewBlocks.sort((a, b) => a.start_time.localeCompare(b.start_time))
   }
 
+  // Sort units by order_index for the edit dropdowns
+  const subjectsData = (subjectsForEdit || []).map((s: any) => ({
+    ...s,
+    units: (s.units || [])
+      .sort((a: any, b: any) => a.order_index - b.order_index)
+      .map((u: any) => ({ ...u, topics: u.topics || [] })),
+  }))
+
   return (
     <TodayClient
       user={user}
@@ -107,6 +118,7 @@ export default async function TodayPage({
       today={today}
       previewBlocks={previewBlocks}
       actionParam={searchParams?.action}
+      subjectsData={subjectsData}
     />
   )
 }
