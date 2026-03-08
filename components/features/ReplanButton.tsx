@@ -6,13 +6,14 @@ import Button from '@/components/ui/Button'
 
 export default function ReplanButton() {
   const pathname = usePathname()
+  // All hooks MUST be declared before any conditional return (Rules of Hooks)
   const [open, setOpen] = useState(false)
-
-  // Only render on the /today page — not on check-in or other routes
-  if (pathname !== '/today') return null
   const [text, setText] = useState('')
   const [loading, setLoading] = useState(false)
   const [success, setSuccess] = useState(false)
+
+  // Only render on the /today page — not on check-in or other routes
+  if (pathname !== '/today') return null
 
   async function handleReplan() {
     if (!text.trim()) return

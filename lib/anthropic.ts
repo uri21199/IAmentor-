@@ -7,8 +7,10 @@ import type {
 } from '@/types'
 import { getCurrentTimeArg, getTodayArg } from '@/lib/utils'
 
+// .trim() is defensive: if the key was pasted with a trailing newline in Vercel
+// env vars, the Anthropic SDK throws "not a legal HTTP header value"
 export const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY!,
+  apiKey: (process.env.ANTHROPIC_API_KEY ?? '').trim(),
 })
 
 // ── Generate daily plan ───────────────────────────────────────────────────────
