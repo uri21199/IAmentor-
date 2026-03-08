@@ -17,6 +17,7 @@ export default function CheckInPage() {
   const supabase = createClient()
   const [step, setStep] = useState(0)
   const [loading, setLoading] = useState(false)
+  const [loadingMsg, setLoadingMsg] = useState('')
   const [alreadyDone, setAlreadyDone] = useState(false)
 
   const [form, setForm] = useState<CheckInFormData>({
@@ -106,6 +107,7 @@ export default function CheckInPage() {
 
   async function handleSubmit() {
     setLoading(true)
+    setLoadingMsg('Guardando check-in...')
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) throw new Error('No autenticado')
@@ -125,11 +127,24 @@ export default function CheckInPage() {
         unexpected_events: form.unexpected_events || null,
       })
       if (error) throw error
+
+      // Auto-generate plan with AI after check-in is saved
+      setLoadingMsg('Generando plan con IA ✨')
+      try {
+        const planRes = await fetch('/api/ai/plan', { method: 'POST' })
+        if (!planRes.ok) {
+          const planErrBody = await planRes.json().catch(() => ({}))
+          console.error('Plan generation failed:', planRes.status, planErrBody)
+        }
+      } catch (planErr) {
+        console.error('Plan generation network error:', planErr)
+      }
+
       router.push('/today')
     } catch (err) {
       console.error(err)
-    } finally {
       setLoading(false)
+      setLoadingMsg('')
     }
   }
 
@@ -159,7 +174,7 @@ export default function CheckInPage() {
   }
 
   return (
-    <div className="min-h-dvh flex flex-col px-4 pt-6 pb-8 max-w-lg mx-auto">
+    <div className="min-h-dvh flex flex-col px-4 pt-6 pb-28 max-w-lg mx-auto">
       {/* Header */}
       <div className="mb-6">
         <h1 className="text-xl font-bold text-text-primary">Check-in matutino ☀️</h1>
@@ -454,7 +469,7 @@ export default function CheckInPage() {
             </Card>
 
             <p className="text-xs text-text-secondary text-center">
-              La IA usará estos datos para generar tu plan personalizado del día
+              Al guardar, la IA generará automáticamente tu plan personalizado del día 🤖
             </p>
           </div>
         )}
@@ -479,15 +494,20 @@ export default function CheckInPage() {
             Siguiente →
           </Button>
         ) : (
-          <Button
-            variant="primary"
-            size="lg"
-            className="flex-1"
-            onClick={handleSubmit}
-            loading={loading}
-          >
-            Guardar check-in ✅
-          </Button>
+          <div className="flex-1 space-y-2">
+            <Button
+              variant="primary"
+              size="lg"
+              className="w-full"
+              onClick={handleSubmit}
+              loading={loading}
+            >
+              Guardar y generar plan ✨
+            </Button>
+            {loading && loadingMsg && (
+              <p className="text-center text-xs text-text-secondary animate-pulse">{loadingMsg}</p>
+            )}
+          </div>
         )}
       </div>
     </div>

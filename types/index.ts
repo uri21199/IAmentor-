@@ -330,3 +330,22 @@ export interface ToastMessage {
   type: 'success' | 'error' | 'info' | 'warning'
   message: string
 }
+
+// ============================================================
+// NOTIFICATION TYPES
+// ============================================================
+
+export type NotificationType = 'post_class' | 'energy_boost' | 'exam_alert' | 'early_win'
+
+export interface AppNotification {
+  id: string
+  user_id: string
+  type: NotificationType
+  message: string
+  target_path: string | null  // deep link URL; null = informational only
+  read_status: boolean
+  triggered_at: string
+  expires_at: string | null
+  metadata: Record<string, unknown>
+  created_at: string
+}

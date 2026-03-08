@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS workouts (
   energy_used INTEGER NOT NULL CHECK (energy_used BETWEEN 1 AND 5),
   completed BOOLEAN DEFAULT false,
   exercises_json JSONB DEFAULT '[]'::jsonb,
+  perceived_effort TEXT CHECK (perceived_effort IN ('easy', 'good', 'hard', 'exhausting')),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

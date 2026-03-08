@@ -37,6 +37,7 @@ export default function SettingsPage() {
   })
   const [savingWork, setSavingWork] = useState(false)
   const [workSaved, setWorkSaved] = useState(false)
+  const [workExpanded, setWorkExpanded] = useState(true)
 
   // ── Class schedule ───────────────────────────────────────
   const [classes, setClasses] = useState<any[]>([])
@@ -80,6 +81,7 @@ export default function SettingsPage() {
           work_default_mode: config.work_default_mode || 'presencial',
           presential_days_json: config.presential_days_json || [],
         })
+        setWorkExpanded(false) // Collapse when already configured
       }
 
       // Load active semester subjects for dropdown FIRST (needed to enable + Agregar button)
@@ -189,6 +191,7 @@ export default function SettingsPage() {
         { onConflict: 'user_id' }
       )
       setWorkSaved(true)
+      setWorkExpanded(false) // Collapse after saving
       setTimeout(() => setWorkSaved(false), 2500)
     } finally {
       setSavingWork(false)
@@ -294,110 +297,144 @@ export default function SettingsPage() {
 
       {/* ── SECTION 1: Work schedule ─────────────────────────── */}
       <Card variant="elevated">
-        <CardHeader>
+        {/* Header row with toggle */}
+        <div className="flex items-center justify-between mb-2">
           <CardTitle>💼 Horario de trabajo</CardTitle>
-        </CardHeader>
-        <p className="text-xs text-text-secondary mb-4">
-          El check-in pre-seleccionará tu modalidad según este horario. Podés cambiarlo ese día.
-        </p>
-
-        {/* Days */}
-        <div className="mb-4">
-          <p className="text-xs text-text-secondary mb-2">Días que trabajás</p>
-          <div className="flex gap-1.5">
-            {DAYS.map(d => (
-              <button
-                key={d.value}
-                onClick={() => toggleWorkDay(d.value)}
-                className={`flex-1 py-2 rounded-xl border text-xs font-medium transition-all min-h-[36px] ${
-                  workConfig.work_days_json.includes(d.value)
-                    ? 'border-primary bg-primary/20 text-primary'
-                    : 'border-border-subtle bg-surface-2 text-text-secondary'
-                }`}
-              >
-                {d.label}
-              </button>
-            ))}
-          </div>
+          <button
+            onClick={() => setWorkExpanded(e => !e)}
+            className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary hover:text-text-primary transition-colors text-sm"
+            title={workExpanded ? 'Contraer' : 'Expandir'}
+          >
+            {workExpanded ? '▲' : '▼'}
+          </button>
         </div>
 
-        {/* Hours */}
-        <div className="flex gap-3 mb-4">
-          <div className="flex-1">
-            <p className="text-xs text-text-secondary mb-1.5">Hora de entrada</p>
-            <input
-              type="time"
-              value={workConfig.work_start}
-              onChange={e => setWorkConfig(p => ({ ...p, work_start: e.target.value }))}
-              className={timeInputClass}
-            />
-          </div>
-          <div className="flex-1">
-            <p className="text-xs text-text-secondary mb-1.5">Hora de salida</p>
-            <input
-              type="time"
-              value={workConfig.work_end}
-              onChange={e => setWorkConfig(p => ({ ...p, work_end: e.target.value }))}
-              className={timeInputClass}
-            />
-          </div>
-        </div>
-
-        {/* Default mode */}
-        <div className="mb-4">
-          <p className="text-xs text-text-secondary mb-2">Modalidad por defecto</p>
-          <div className="flex gap-2">
-            {([
-              { value: 'presencial', label: '🏢 Presencial' },
-              { value: 'remoto', label: '🏠 Remoto' },
-              { value: 'mixto', label: '🔀 Mixto' },
-            ] as { value: 'presencial' | 'remoto' | 'mixto'; label: string }[]).map(opt => (
-              <button
-                key={opt.value}
-                onClick={() => setWorkConfig(p => ({ ...p, work_default_mode: opt.value }))}
-                className={`flex-1 py-2.5 rounded-xl border text-xs font-medium transition-all min-h-[40px] ${
-                  workConfig.work_default_mode === opt.value
-                    ? 'border-primary bg-primary/20 text-text-primary'
-                    : 'border-border-subtle bg-surface-2 text-text-secondary'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Presential days (mixto only) */}
-        {workConfig.work_default_mode === 'mixto' && (
-          <div className="mb-4">
-            <p className="text-xs text-text-secondary mb-2">Días presenciales habituales</p>
-            <div className="flex gap-1.5">
-              {DAYS.filter(d => workConfig.work_days_json.includes(d.value)).map(d => (
-                <button
-                  key={d.value}
-                  onClick={() => togglePresentialDay(d.value)}
-                  className={`flex-1 py-2 rounded-xl border text-xs font-medium transition-all min-h-[36px] ${
-                    workConfig.presential_days_json.includes(d.value)
-                      ? 'border-amber-500 bg-amber-500/20 text-amber-400'
-                      : 'border-border-subtle bg-surface-2 text-text-secondary'
-                  }`}
-                >
-                  {d.label}
-                </button>
-              ))}
-            </div>
-          </div>
+        {/* Collapsed summary view */}
+        {!workExpanded && (
+          <button
+            onClick={() => setWorkExpanded(true)}
+            className="w-full text-left p-3 rounded-xl bg-surface-2 border border-border-subtle hover:border-primary/30 transition-all mt-1"
+          >
+            <p className="text-sm text-text-primary">
+              {workConfig.work_days_json.length > 0
+                ? workConfig.work_days_json.map(d => DAYS.find(day => day.value === d)?.label).filter(Boolean).join(' · ')
+                : 'Sin días laborales'}
+            </p>
+            <p className="text-xs text-text-secondary mt-0.5">
+              {workConfig.work_start}–{workConfig.work_end}
+              {' · '}
+              {workConfig.work_default_mode === 'presencial' ? '🏢 Presencial' : workConfig.work_default_mode === 'remoto' ? '🏠 Remoto' : '🔀 Mixto'}
+            </p>
+            <p className="text-xs text-primary mt-1">Tocar para editar ✏️</p>
+          </button>
         )}
 
-        <Button
-          variant="primary"
-          size="md"
-          className="w-full"
-          onClick={saveWorkConfig}
-          loading={savingWork}
-        >
-          {workSaved ? '✅ Guardado' : 'Guardar configuración de trabajo'}
-        </Button>
+        {/* Expanded form */}
+        {workExpanded && (
+          <>
+            <p className="text-xs text-text-secondary mb-4">
+              El check-in pre-seleccionará tu modalidad según este horario. Podés cambiarlo ese día.
+            </p>
+
+            {/* Days */}
+            <div className="mb-4">
+              <p className="text-xs text-text-secondary mb-2">Días que trabajás</p>
+              <div className="flex gap-1.5">
+                {DAYS.map(d => (
+                  <button
+                    key={d.value}
+                    onClick={() => toggleWorkDay(d.value)}
+                    className={`flex-1 py-2 rounded-xl border text-xs font-medium transition-all min-h-[36px] ${
+                      workConfig.work_days_json.includes(d.value)
+                        ? 'border-primary bg-primary/20 text-primary'
+                        : 'border-border-subtle bg-surface-2 text-text-secondary'
+                    }`}
+                  >
+                    {d.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Hours */}
+            <div className="flex gap-3 mb-4">
+              <div className="flex-1">
+                <p className="text-xs text-text-secondary mb-1.5">Hora de entrada</p>
+                <input
+                  type="time"
+                  value={workConfig.work_start}
+                  onChange={e => setWorkConfig(p => ({ ...p, work_start: e.target.value }))}
+                  className={timeInputClass}
+                />
+              </div>
+              <div className="flex-1">
+                <p className="text-xs text-text-secondary mb-1.5">Hora de salida</p>
+                <input
+                  type="time"
+                  value={workConfig.work_end}
+                  onChange={e => setWorkConfig(p => ({ ...p, work_end: e.target.value }))}
+                  className={timeInputClass}
+                />
+              </div>
+            </div>
+
+            {/* Default mode */}
+            <div className="mb-4">
+              <p className="text-xs text-text-secondary mb-2">Modalidad por defecto</p>
+              <div className="flex gap-2">
+                {([
+                  { value: 'presencial', label: '🏢 Presencial' },
+                  { value: 'remoto', label: '🏠 Remoto' },
+                  { value: 'mixto', label: '🔀 Mixto' },
+                ] as { value: 'presencial' | 'remoto' | 'mixto'; label: string }[]).map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setWorkConfig(p => ({ ...p, work_default_mode: opt.value }))}
+                    className={`flex-1 py-2.5 rounded-xl border text-xs font-medium transition-all min-h-[40px] ${
+                      workConfig.work_default_mode === opt.value
+                        ? 'border-primary bg-primary/20 text-text-primary'
+                        : 'border-border-subtle bg-surface-2 text-text-secondary'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Presential days (mixto only) */}
+            {workConfig.work_default_mode === 'mixto' && (
+              <div className="mb-4">
+                <p className="text-xs text-text-secondary mb-2">Días presenciales habituales</p>
+                <div className="flex gap-1.5">
+                  {DAYS.filter(d => workConfig.work_days_json.includes(d.value)).map(d => (
+                    <button
+                      key={d.value}
+                      onClick={() => togglePresentialDay(d.value)}
+                      className={`flex-1 py-2 rounded-xl border text-xs font-medium transition-all min-h-[36px] ${
+                        workConfig.presential_days_json.includes(d.value)
+                          ? 'border-amber-500 bg-amber-500/20 text-amber-400'
+                          : 'border-border-subtle bg-surface-2 text-text-secondary'
+                      }`}
+                    >
+                      {d.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <Button
+              variant="primary"
+              size="md"
+              className="w-full"
+              onClick={saveWorkConfig}
+              loading={savingWork}
+            >
+              {workSaved ? '✅ Guardado' : 'Guardar configuración de trabajo'}
+            </Button>
+          </>
+        )}
       </Card>
 
       {/* ── SECTION 2: University class schedule ─────────────── */}
@@ -594,7 +631,7 @@ export default function SettingsPage() {
       {/* ── Add class modal ──────────────────────────────────── */}
       {showClassForm && (
         <div className="fixed inset-0 z-50 flex items-end justify-center px-4 pt-4 pb-24 bg-black/60 backdrop-blur-sm">
-          <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-3xl p-5 shadow-2xl">
+          <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-3xl p-5 shadow-2xl max-h-[85vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-semibold text-text-primary">🎓 Agregar clase fija</h3>
               <button
@@ -605,10 +642,10 @@ export default function SettingsPage() {
               </button>
             </div>
 
-            <div className="space-y-4">
+            <div className="space-y-5">
               {/* Subject dropdown */}
               <div>
-                <p className="text-xs text-text-secondary mb-1.5">Materia</p>
+                <p className="text-xs text-text-secondary mb-2">Materia</p>
                 <select
                   value={classForm.subject_id}
                   onChange={e => setClassForm(p => ({ ...p, subject_id: e.target.value }))}

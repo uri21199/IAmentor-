@@ -4,7 +4,8 @@ import { generateDailyPlan } from '@/lib/anthropic'
 import { calculateStudyPriorities } from '@/lib/study-priority'
 import { getTodayEvents, refreshAccessToken } from '@/lib/google-calendar'
 import { format, subDays } from 'date-fns'
-import type { PlanGenerationContext, SubjectWithDetails, TimeBlock } from '@/types'
+import { getTodayArg, getDowArg } from '@/lib/utils'
+import type { PlanGenerationContext, SubjectWithDetails, TimeBlock, TravelSegment } from '@/types'
 
 export async function POST() {
   try {
@@ -15,8 +16,9 @@ export async function POST() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const today = format(new Date(), 'yyyy-MM-dd')
-    const todayDow = new Date().getDay() // 0=Sun, 1=Mon, ..., 6=Sat
+    // Use Argentina timezone — Vercel runs UTC, Argentina = UTC-3
+    const today = getTodayArg()
+    const todayDow = getDowArg() // 0=Sun, 1=Mon, ..., 6=Sat
 
     // ── 1. Get today's check-in ─────────────────────────────
     const { data: checkin } = await supabase
@@ -152,6 +154,60 @@ export async function POST() {
         subject_id: cls.subject_id,
         completed: false,
         priority: 'high',
+      })
+    }
+
+    // ── 5c. Travel blocks (deterministic — always injected) ─
+    const addMins = (t: string, m: number): string => {
+      const [h, min] = t.split(':').map(Number)
+      const tot = h * 60 + min + m
+      return `${String(Math.floor(tot / 60) % 24).padStart(2, '0')}:${String(tot % 60).padStart(2, '0')}`
+    }
+    const subMins = (t: string, m: number): string => {
+      const [h, min] = t.split(':').map(Number)
+      const tot = Math.max(0, h * 60 + min - m)
+      return `${String(Math.floor(tot / 60)).padStart(2, '0')}:${String(tot % 60).padStart(2, '0')}`
+    }
+
+    const travelSegments: TravelSegment[] = checkin.travel_route_json || []
+    if (travelSegments.length > 0) {
+      const sortedFixed = [...fixedBlocks].sort((a, b) => a.start_time.localeCompare(b.start_time))
+      const firstStart = sortedFixed[0]?.start_time || '09:00'
+      const lastEnd = sortedFixed[sortedFixed.length - 1]?.end_time || '18:00'
+
+      // Pre-work segments: place before first fixed block, backwards
+      const preSegs = travelSegments.slice(0, -1)
+      const totalPreMins = preSegs.reduce((s, seg) => s + seg.duration_minutes, 0)
+      let cursor = subMins(firstStart, totalPreMins)
+
+      preSegs.forEach((seg, i) => {
+        const end = addMins(cursor, seg.duration_minutes)
+        fixedBlocks.push({
+          id: `travel_${i + 1}`,
+          start_time: cursor,
+          end_time: end,
+          type: 'travel',
+          title: `🚌 ${seg.origin} → ${seg.destination}`,
+          description: `Viaje ${seg.duration_minutes} min — repasá teoría mientras viajás`,
+          travel_segment: seg,
+          completed: false,
+          priority: 'low',
+        })
+        cursor = end
+      })
+
+      // Return trip: after last fixed block
+      const returnSeg = travelSegments[travelSegments.length - 1]
+      fixedBlocks.push({
+        id: `travel_${travelSegments.length}`,
+        start_time: lastEnd,
+        end_time: addMins(lastEnd, returnSeg.duration_minutes),
+        type: 'travel',
+        title: `🚌 ${returnSeg.origin} → ${returnSeg.destination}`,
+        description: `Viaje ${returnSeg.duration_minutes} min — repasá teoría mientras viajás`,
+        travel_segment: returnSeg,
+        completed: false,
+        priority: 'low',
       })
     }
 

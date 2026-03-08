@@ -5,7 +5,7 @@ import type {
   StudyPriorityResult,
   TravelSegment,
 } from '@/types'
-import { format } from 'date-fns'
+import { getCurrentTimeArg, getTodayArg } from '@/lib/utils'
 
 export const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY!,
@@ -18,7 +18,8 @@ export async function generateDailyPlan(
 ): Promise<TimeBlock[]> {
   const { checkin, calendar_events, subjects_with_topics, study_priorities, energy_history, fixed_blocks } = context
 
-  const currentTime = format(new Date(), 'HH:mm')
+  // Argentina timezone: Vercel runs UTC, Argentina = UTC-3
+  const currentTime = getCurrentTimeArg()
 
   const travelSegments = checkin.travel_route_json
     .map((s, i) => `  Tramo ${i + 1}: ${s.origin} → ${s.destination} (${s.duration_minutes} min)`)
@@ -52,6 +53,13 @@ export async function generateDailyPlan(
   const prompt = `Eres un mentor de productividad personal. Generá los bloques de tiempo ADICIONALES para hoy.
 
 ## HORA ACTUAL: ${currentTime}
+
+## CONTEXTO CULTURAL — ARGENTINA (GMT-3)
+Adaptá los horarios a la cultura argentina:
+- Almuerzo: entre 12:30 y 14:00 (incluilo SIEMPRE que haya hueco disponible)
+- Merienda: 16:30–17:30 (descanso corto, opcional)
+- Cena: entre 21:00 y 22:30 (incluila si el día llega hasta esa hora)
+IMPORTANTE: NO uses horarios de EE.UU. (cena 18–19hs, almuerzo antes de las 12hs).
 
 ## BLOQUES FIJOS (ya están agendados — NO los incluyas en tu respuesta)
 ${fixedBlocksStr}
@@ -130,11 +138,14 @@ export async function replanDay(
   change: string,
   context: { energy_level: number; stress_level: string }
 ): Promise<TimeBlock[]> {
-  const now = format(new Date(), 'HH:mm')
+  // Argentina timezone: Vercel runs UTC, Argentina = UTC-3
+  const now = getCurrentTimeArg()
+  const [y, m, d] = getTodayArg().split('-')
+  const todayDisplay = `${d}/${m}/${y}`
 
   const prompt = `Eres un mentor de productividad. El usuario necesita reorganizar su plan del día.
 
-## PLAN ACTUAL (${format(new Date(), 'dd/MM/yyyy')})
+## PLAN ACTUAL (${todayDisplay})
 ${JSON.stringify(currentPlan, null, 2)}
 
 ## HORA ACTUAL: ${now}

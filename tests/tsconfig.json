@@ -2,15 +2,17 @@
   "compilerOptions": {
     "target": "ES2020",
     "module": "commonjs",
-    "moduleResolution": "node",
+    "lib": ["ES2020"],
+    "strict": true,
     "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
-    "strict": false,
-    "skipLibCheck": true,
     "outDir": "./dist",
-    "baseUrl": "."
+    "rootDir": "..",
+    "paths": { "@/*": ["..//*"] },
+    "baseUrl": "..",
+    "skipLibCheck": true,
+    "moduleResolution": "node"
   },
-  "include": ["./**/*.ts"],
-  "exclude": ["node_modules"]
+  "include": ["./e2e-flow.ts", "../lib/study-priority.ts", "../lib/utils.ts", "../lib/exercises.ts", "../types/index.ts"],
+  "exclude": ["../node_modules"]
 }

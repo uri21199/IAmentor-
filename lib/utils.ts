@@ -98,8 +98,35 @@ export function formatMinutes(minutes: number): string {
   return m > 0 ? `${h}h ${m}min` : `${h}h`
 }
 
+// ── Argentina timezone helpers (Vercel runs UTC, Argentina = UTC-3) ─────────
+
+/** Returns today's date string (YYYY-MM-DD) in Argentina timezone */
+export function getTodayArg(): string {
+  return new Date().toLocaleDateString('en-CA', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+  })
+}
+
+/** Returns current time string (HH:mm) in Argentina timezone */
+export function getCurrentTimeArg(): string {
+  return new Date().toLocaleTimeString('en-GB', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+}
+
+/** Returns day of week (0=Sun..6=Sat) in Argentina timezone */
+export function getDowArg(): number {
+  const argDate = new Date(
+    new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' })
+  )
+  return argDate.getDay()
+}
+
 export function getGreeting(): string {
-  const hour = new Date().getHours()
+  const hour = parseInt(getCurrentTimeArg().split(':')[0], 10)
   if (hour < 12) return 'Buenos días'
   if (hour < 18) return 'Buenas tardes'
   return 'Buenas noches'

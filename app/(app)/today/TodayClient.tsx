@@ -1,6 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { format, parseISO, differenceInDays } from 'date-fns'
 import { es } from 'date-fns/locale'
@@ -9,9 +10,10 @@ import { TimeBlock } from '@/components/ui/TimeBlock'
 import { Badge } from '@/components/ui/Badge'
 import { ProgressBar } from '@/components/ui/ProgressBar'
 import Button from '@/components/ui/Button'
-import { getGreeting, stressLabel, workModeLabel } from '@/lib/utils'
-import type { CheckIn, DailyPlan, AcademicEvent, TimeBlock as TimeBlockType } from '@/types'
+import NotificationBanner from '@/components/features/NotificationBanner'
+import { getGreeting, stressLabel } from '@/lib/utils'
 import { getDaysColor as getColor } from '@/lib/study-priority'
+import type { CheckIn, DailyPlan, TimeBlock as TimeBlockType, AppNotification } from '@/types'
 
 interface Props {
   user: { id: string; email?: string }
@@ -20,16 +22,90 @@ interface Props {
   upcomingEvents: any[]
   energyHistory: { date: string; energy_level: number }[]
   today: string
+  previewBlocks?: TimeBlockType[]
+  /** Passed from page.tsx searchParams: 'replan' triggers auto-replan on mount */
+  actionParam?: string
 }
 
-export default function TodayClient({ user, checkin, plan, upcomingEvents, energyHistory, today }: Props) {
+export default function TodayClient({
+  user,
+  checkin,
+  plan,
+  upcomingEvents,
+  energyHistory,
+  today,
+  previewBlocks = [],
+  actionParam,
+}: Props) {
+  const router = useRouter()
+
   const [blocks, setBlocks] = useState<TimeBlockType[]>(plan?.plan_json || [])
   const [generating, setGenerating] = useState(false)
   const [completion, setCompletion] = useState(plan?.completion_percentage || 0)
+  const [notifications, setNotifications] = useState<AppNotification[]>([])
 
   const greeting = getGreeting()
   const dateLabel = format(parseISO(today), "EEEE d 'de' MMMM", { locale: es })
 
+  // ── Fetch & process notifications once on mount ───────────────────────────
+  useEffect(() => {
+    async function fetchNotifications() {
+      try {
+        const res = await fetch('/api/notifications')
+        if (!res.ok) return
+        const data = await res.json()
+        setNotifications(data.notifications ?? [])
+      } catch {
+        // non-blocking — no notifications is fine
+      }
+    }
+    fetchNotifications()
+  }, [])
+
+  // ── Auto-replan when landing on /today?action=replan ──────────────────────
+  useEffect(() => {
+    if (actionParam === 'replan' && blocks.length > 0) {
+      handleReplan()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [actionParam])
+
+  // ── Mark notification as read → returns target_path from server ───────────
+  const markRead = useCallback(async (id: string): Promise<string | null> => {
+    setNotifications(prev => prev.filter(n => n.id !== id))
+    try {
+      const res = await fetch(`/api/notifications/${id}`, { method: 'PATCH' })
+      if (!res.ok) return null
+      const data = await res.json()
+      return data.target_path ?? null
+    } catch {
+      return null
+    }
+  }, [])
+
+  // Called when user clicks the action button (e.g. "Ver materia", "Replanificar")
+  const handleNotificationAction = useCallback(async (id: string, targetPath: string | null) => {
+    const serverPath = await markRead(id)
+    const destination = serverPath ?? targetPath
+
+    if (!destination) return
+
+    // Energy boost: replan in-place — no need to navigate away
+    if (destination === '/today?action=replan') {
+      await handleReplan()
+      return
+    }
+
+    router.push(destination)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [markRead, router])
+
+  // Called when user clicks ✕ (dismiss without action)
+  const handleNotificationDismiss = useCallback(async (id: string) => {
+    await markRead(id)
+  }, [markRead])
+
+  // ── Generate plan ─────────────────────────────────────────────────────────
   async function generatePlan() {
     setGenerating(true)
     try {
@@ -44,6 +120,28 @@ export default function TodayClient({ user, checkin, plan, upcomingEvents, energ
     }
   }
 
+  // ── Replan (triggered by energy_boost notification) ───────────────────────
+  async function handleReplan() {
+    setGenerating(true)
+    try {
+      const res = await fetch('/api/ai/replan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          change: 'Tengo más energía de lo esperado y quiero una sesión más productiva',
+        }),
+      })
+      if (!res.ok) throw new Error('Error al replanificar')
+      const data = await res.json()
+      if (data.blocks?.length) setBlocks(data.blocks)
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  // ── Toggle block completion ───────────────────────────────────────────────
   async function toggleBlock(id: string, completed: boolean) {
     const updated = blocks.map(b => b.id === id ? { ...b, completed } : b)
     setBlocks(updated)
@@ -52,7 +150,6 @@ export default function TodayClient({ user, checkin, plan, upcomingEvents, energ
     const pct = updated.length > 0 ? Math.round((completedCount / updated.length) * 100) : 0
     setCompletion(pct)
 
-    // Persist
     await fetch('/api/plan/update-block', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -60,8 +157,10 @@ export default function TodayClient({ user, checkin, plan, upcomingEvents, energ
     })
   }
 
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="px-4 pt-6 pb-4 space-y-5 max-w-lg mx-auto">
+
       {/* Header */}
       <div>
         <p className="text-text-secondary text-sm capitalize">{dateLabel}</p>
@@ -70,7 +169,14 @@ export default function TodayClient({ user, checkin, plan, upcomingEvents, energ
         </h1>
       </div>
 
-      {/* Check-in status card */}
+      {/* ── Notification banners ───────────────────────────────────────────── */}
+      <NotificationBanner
+        notifications={notifications}
+        onAction={handleNotificationAction}
+        onDismiss={handleNotificationDismiss}
+      />
+
+      {/* Check-in status / CTA */}
       {!checkin ? (
         <div className="gradient-card border border-primary/20 rounded-3xl p-5">
           <p className="text-sm text-text-secondary mb-1">Sin check-in matutino</p>
@@ -125,28 +231,46 @@ export default function TodayClient({ user, checkin, plan, upcomingEvents, energ
         </Card>
       )}
 
-      {/* Daily plan */}
-      <div>
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-base font-semibold text-text-primary">Plan del día</h2>
-          {blocks.length > 0 && (
-            <span className="text-sm text-text-secondary">{Math.round(completion)}% completado</span>
-          )}
+      {/* Preview blocks (when no check-in but fixed schedule exists) */}
+      {!checkin && previewBlocks.length > 0 && (
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <h2 className="text-base font-semibold text-text-primary">Tu día de hoy</h2>
+            <span className="px-2 py-0.5 rounded-full bg-surface-2 border border-border-subtle text-text-secondary text-xs">
+              Vista previa
+            </span>
+          </div>
+          <p className="text-xs text-text-secondary mb-3">
+            Tus bloques fijos (trabajo y clases). Completá el check-in para que la IA personalice el resto.
+          </p>
+          <div className="space-y-2 pointer-events-none opacity-60">
+            {previewBlocks.map(block => (
+              <TimeBlock key={block.id} block={block} onToggle={() => {}} />
+            ))}
+          </div>
         </div>
+      )}
 
-        {blocks.length > 0 && (
-          <ProgressBar value={completion} color="primary" size="sm" className="mb-4" />
-        )}
+      {/* Daily plan (only when check-in is done) */}
+      {checkin && (
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-base font-semibold text-text-primary">Plan del día</h2>
+            {blocks.length > 0 && (
+              <span className="text-sm text-text-secondary">{Math.round(completion)}% completado</span>
+            )}
+          </div>
 
-        {blocks.length === 0 ? (
-          <div className="text-center py-10">
-            <p className="text-4xl mb-3">🤖</p>
-            <p className="text-text-secondary text-sm mb-4">
-              {checkin
-                ? 'La IA puede generar tu plan personalizado'
-                : 'Hacé el check-in primero para generar el plan'}
-            </p>
-            {checkin && (
+          {blocks.length > 0 && (
+            <ProgressBar value={completion} color="primary" size="sm" className="mb-4" />
+          )}
+
+          {blocks.length === 0 ? (
+            <div className="text-center py-10">
+              <p className="text-4xl mb-3">🤖</p>
+              <p className="text-text-secondary text-sm mb-4">
+                La IA puede generar tu plan personalizado
+              </p>
               <Button
                 variant="primary"
                 onClick={generatePlan}
@@ -155,30 +279,30 @@ export default function TodayClient({ user, checkin, plan, upcomingEvents, energ
               >
                 Generar plan con IA ✨
               </Button>
-            )}
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {blocks.map(block => (
-              <TimeBlock
-                key={block.id}
-                block={block}
-                onToggle={toggleBlock}
-              />
-            ))}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {blocks.map(block => (
+                <TimeBlock
+                  key={block.id}
+                  block={block}
+                  onToggle={toggleBlock}
+                />
+              ))}
 
-            <Button
-              variant="ghost"
-              size="sm"
-              className="w-full mt-2 text-text-secondary"
-              onClick={generatePlan}
-              loading={generating}
-            >
-              🔄 Regenerar plan
-            </Button>
-          </div>
-        )}
-      </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full mt-2 text-text-secondary"
+                onClick={generatePlan}
+                loading={generating}
+              >
+                🔄 Regenerar plan
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Upcoming academic events */}
       {upcomingEvents.length > 0 && (

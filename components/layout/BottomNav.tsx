@@ -17,7 +17,7 @@ export default function BottomNav() {
   const pathname = usePathname()
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-50 bg-surface/95 backdrop-blur-xl border-t border-border-subtle pb-safe">
+    <nav aria-label="Navegación principal" className="fixed bottom-0 left-0 right-0 z-50 bg-surface/95 backdrop-blur-xl border-t border-border-subtle pb-safe">
       <div className="flex items-center justify-around h-16 px-2 max-w-lg mx-auto">
         {NAV_ITEMS.map(item => {
           const isActive = pathname === item.href || pathname.startsWith(item.href + '/')
@@ -25,6 +25,8 @@ export default function BottomNav() {
             <Link
               key={item.href}
               href={item.href}
+              aria-label={item.label}
+              aria-current={isActive ? 'page' : undefined}
               className={cn(
                 'flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-2xl transition-all duration-200 min-w-[56px] min-h-[48px] justify-center',
                 isActive

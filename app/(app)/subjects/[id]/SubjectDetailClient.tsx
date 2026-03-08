@@ -50,8 +50,14 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
     understanding_level: 3,
     has_homework: false,
     homework_description: '',
+    topics_covered: [] as string[], // topic IDs seen in class
   })
   const [logLoading, setLogLoading] = useState(false)
+
+  // ── Quick-add topic from within the post-clase modal ──────
+  const [quickAddUnitId, setQuickAddUnitId] = useState<string | null>(null)
+  const [quickTopicName, setQuickTopicName] = useState('')
+  const [quickAdding, setQuickAdding] = useState(false)
 
   // ── Event modal ───────────────────────────────────────────
   const [showEventForm, setShowEventForm] = useState(false)
@@ -121,6 +127,37 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
     }
   }
 
+  // ── Quick-add topic from post-clase modal ─────────────────
+  async function quickAddTopic(unitId: string) {
+    if (!quickTopicName.trim()) return
+    setQuickAdding(true)
+    try {
+      const { data, error } = await supabase
+        .from('topics')
+        .insert({ unit_id: unitId, name: quickTopicName.trim(), full_description: '', status: 'yellow' })
+        .select()
+        .single()
+      if (!error && data) {
+        setUnitTopics(prev => ({ ...prev, [unitId]: [...(prev[unitId] || []), data] }))
+        // Auto-select the newly created topic
+        setClassLogData(d => ({ ...d, topics_covered: [...d.topics_covered, data.id] }))
+        setQuickTopicName('')
+        setQuickAddUnitId(null)
+      }
+    } finally {
+      setQuickAdding(false)
+    }
+  }
+
+  function toggleTopicCovered(topicId: string) {
+    setClassLogData(d => ({
+      ...d,
+      topics_covered: d.topics_covered.includes(topicId)
+        ? d.topics_covered.filter(id => id !== topicId)
+        : [...d.topics_covered, topicId],
+    }))
+  }
+
   // ── Class log ─────────────────────────────────────────────
   async function saveClassLog() {
     setLogLoading(true)
@@ -129,12 +166,38 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
         user_id: userId,
         subject_id: subject.id,
         date: today,
-        topics_covered_json: [],
+        topics_covered_json: classLogData.topics_covered,
         understanding_level: classLogData.understanding_level,
         has_homework: classLogData.has_homework,
         homework_description: classLogData.has_homework ? classLogData.homework_description : null,
       })
-      if (!error) setShowClassLog(false)
+      if (!error) {
+        // Auto-promote covered topics from 'red' → 'yellow' (seen in class = at least partially known)
+        const redCoveredIds = classLogData.topics_covered.filter(id => {
+          for (const topics of Object.values(unitTopics)) {
+            const t = topics.find(t => t.id === id)
+            if (t && t.status === 'red') return true
+          }
+          return false
+        })
+        if (redCoveredIds.length > 0) {
+          await supabase
+            .from('topics')
+            .update({ status: 'yellow', last_studied: new Date().toISOString() })
+            .in('id', redCoveredIds)
+          setUnitTopics(prev => {
+            const next = { ...prev }
+            for (const unitId in next) {
+              next[unitId] = next[unitId].map(t =>
+                redCoveredIds.includes(t.id) ? { ...t, status: 'yellow' as TopicStatus } : t
+              )
+            }
+            return next
+          })
+        }
+        setShowClassLog(false)
+        setClassLogData({ understanding_level: 3, has_homework: false, homework_description: '', topics_covered: [] })
+      }
     } finally {
       setLogLoading(false)
     }
@@ -168,6 +231,7 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
 
   // ── Shared input classes ──────────────────────────────────
   const inlineInput = 'flex-1 h-9 px-3 rounded-xl bg-surface-2 border border-border-subtle text-sm text-text-primary placeholder-text-secondary focus:outline-none focus:border-primary/60'
+  const modalInput  = 'w-full h-11 px-4 rounded-2xl bg-surface-2 border border-border-subtle text-sm text-text-primary placeholder-text-secondary focus:outline-none focus:border-primary/60'
 
   return (
     <div className="px-4 pt-6 pb-4 space-y-5 max-w-lg mx-auto">
@@ -267,23 +331,18 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
 
         {localUnits.map(unit => (
           <div key={unit.id}>
-            {/* Unit header */}
             <div className="flex items-center justify-between mb-2">
               <p className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
                 {unit.name}
               </p>
               <button
-                onClick={() => {
-                  setAddingTopicForUnit(unit.id)
-                  setNewTopicName('')
-                }}
+                onClick={() => { setAddingTopicForUnit(unit.id); setNewTopicName('') }}
                 className="text-xs text-primary hover:text-primary/80 transition-colors px-1 min-h-[28px]"
               >
                 + Tema
               </button>
             </div>
 
-            {/* Inline add topic */}
             {addingTopicForUnit === unit.id && (
               <div className="flex gap-2 mb-2">
                 <input
@@ -314,15 +373,9 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
               </div>
             )}
 
-            {/* Topic pills */}
             <div className="flex flex-wrap gap-2">
               {(unitTopics[unit.id] || []).map(topic => (
-                <TopicPill
-                  key={topic.id}
-                  topic={topic}
-                  onStatusChange={handleTopicStatusChange}
-                  compact
-                />
+                <TopicPill key={topic.id} topic={topic} onStatusChange={handleTopicStatusChange} compact />
               ))}
               {(unitTopics[unit.id] || []).length === 0 && addingTopicForUnit !== unit.id && (
                 <p className="text-xs text-text-secondary italic">Sin temas — usá "+ Tema" para agregar</p>
@@ -331,7 +384,6 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
           </div>
         ))}
 
-        {/* Add unit */}
         {showAddUnit ? (
           <div className="flex gap-2 mt-2">
             <input
@@ -372,60 +424,194 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
 
       {/* ── Class log modal ──────────────────────────────────── */}
       {showClassLog && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center px-4 pt-4 pb-24 bg-black/60 backdrop-blur-sm">
-          <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-3xl p-5 shadow-2xl">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-base font-semibold text-text-primary">📝 Registro post-clase</h3>
-              <button
-                onClick={() => setShowClassLog(false)}
-                className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary"
-              >
-                ✕
-              </button>
-            </div>
-
-            <EmojiSelector
-              label="¿Cómo fue la comprensión en clase?"
-              options={UNDERSTANDING_OPTIONS}
-              value={classLogData.understanding_level}
-              onChange={v => setClassLogData(d => ({ ...d, understanding_level: v }))}
-            />
-
-            <div className="mt-4 space-y-2">
-              <p className="text-sm text-text-secondary">¿Hay tarea o trabajo práctico?</p>
-              <div className="flex gap-3">
-                {[true, false].map(v => (
-                  <button
-                    key={String(v)}
-                    onClick={() => setClassLogData(d => ({ ...d, has_homework: v }))}
-                    className={`flex-1 py-2.5 rounded-2xl border text-sm transition-all min-h-[44px] ${
-                      classLogData.has_homework === v
-                        ? 'border-primary bg-primary/20 text-text-primary'
-                        : 'border-border-subtle bg-surface-2 text-text-secondary'
-                    }`}
-                  >
-                    {v ? '✅ Sí' : '❌ No'}
-                  </button>
-                ))}
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-t-3xl shadow-2xl max-h-[88dvh] overflow-y-auto">
+            <div className="p-5 pb-28">
+              <div className="flex items-center justify-between mb-5">
+                <h3 className="text-base font-semibold text-text-primary">📝 Registro post-clase</h3>
+                <button
+                  onClick={() => setShowClassLog(false)}
+                  className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary"
+                >
+                  ✕
+                </button>
               </div>
 
-              {classLogData.has_homework && (
-                <textarea
-                  value={classLogData.homework_description}
-                  onChange={e => setClassLogData(d => ({ ...d, homework_description: e.target.value }))}
-                  placeholder="Describí la tarea..."
-                  className="w-full h-20 px-4 py-3 rounded-2xl bg-surface-2 border border-border-subtle text-sm text-text-primary placeholder-text-secondary resize-none focus:outline-none focus:border-primary/60"
-                />
-              )}
-            </div>
+              {/* ── Topics covered section ─────────────────────────── */}
+              <div className="mb-5">
+                <p className="text-sm font-medium text-text-primary mb-2">Temas vistos en clase</p>
 
-            <div className="flex gap-3 mt-4">
-              <Button variant="secondary" className="flex-1" onClick={() => setShowClassLog(false)}>
-                Cancelar
-              </Button>
-              <Button variant="primary" className="flex-1" onClick={saveClassLog} loading={logLoading}>
-                Guardar
-              </Button>
+                {allTopics.length === 0 ? (
+                  /* No topics at all — guide user */
+                  <div className="p-3 rounded-2xl bg-surface-2 border border-border-subtle">
+                    <p className="text-xs text-text-secondary mb-2">
+                      Aún no hay temas en el temario. Podés agregar uno ahora:
+                    </p>
+                    {localUnits.length > 0 ? (
+                      quickAddUnitId === null ? (
+                        <button
+                          onClick={() => setQuickAddUnitId(localUnits[0].id)}
+                          className="text-xs text-primary hover:text-primary/80"
+                        >
+                          + Agregar primer tema
+                        </button>
+                      ) : (
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={quickTopicName}
+                            onChange={e => setQuickTopicName(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') quickAddTopic(quickAddUnitId) }}
+                            placeholder="Nombre del tema..."
+                            autoFocus
+                            className="flex-1 h-9 px-3 rounded-xl bg-background border border-border-subtle text-sm text-text-primary placeholder-text-secondary focus:outline-none focus:border-primary/60"
+                          />
+                          <button
+                            onClick={() => quickAddTopic(quickAddUnitId)}
+                            disabled={!quickTopicName.trim() || quickAdding}
+                            className="px-3 h-9 rounded-xl bg-primary text-white text-xs disabled:opacity-40"
+                          >
+                            {quickAdding ? '…' : '✓'}
+                          </button>
+                        </div>
+                      )
+                    ) : (
+                      <p className="text-xs text-text-secondary italic">
+                        Primero creá unidades en el temario.
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  /* Topics grouped by unit */
+                  <div className="space-y-4">
+                    {localUnits.map(unit => {
+                      const topics = unitTopics[unit.id] || []
+                      return (
+                        <div key={unit.id}>
+                          <div className="flex items-center justify-between mb-2">
+                            <p className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
+                              {unit.name}
+                            </p>
+                            {/* Quick add topic within modal */}
+                            {quickAddUnitId === unit.id ? (
+                              <div className="flex gap-1 items-center">
+                                <input
+                                  type="text"
+                                  value={quickTopicName}
+                                  onChange={e => setQuickTopicName(e.target.value)}
+                                  onKeyDown={e => {
+                                    if (e.key === 'Enter') quickAddTopic(unit.id)
+                                    if (e.key === 'Escape') { setQuickAddUnitId(null); setQuickTopicName('') }
+                                  }}
+                                  placeholder="Nuevo tema..."
+                                  autoFocus
+                                  className="w-32 h-7 px-2 rounded-lg bg-background border border-border-subtle text-xs text-text-primary placeholder-text-secondary focus:outline-none focus:border-primary/60"
+                                />
+                                <button
+                                  onClick={() => quickAddTopic(unit.id)}
+                                  disabled={!quickTopicName.trim() || quickAdding}
+                                  className="h-7 px-2 rounded-lg bg-primary text-white text-xs disabled:opacity-40"
+                                >
+                                  {quickAdding ? '…' : '✓'}
+                                </button>
+                                <button
+                                  onClick={() => { setQuickAddUnitId(null); setQuickTopicName('') }}
+                                  className="h-7 w-7 flex items-center justify-center rounded-lg bg-surface-2 text-text-secondary text-xs"
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => { setQuickAddUnitId(unit.id); setQuickTopicName('') }}
+                                className="text-xs text-primary hover:text-primary/80 transition-colors"
+                              >
+                                + tema nuevo
+                              </button>
+                            )}
+                          </div>
+
+                          {topics.length === 0 ? (
+                            <p className="text-xs text-text-secondary italic">Sin temas en esta unidad</p>
+                          ) : (
+                            <div className="flex flex-wrap gap-2">
+                              {topics.map(topic => {
+                                const selected = classLogData.topics_covered.includes(topic.id)
+                                return (
+                                  <button
+                                    key={topic.id}
+                                    onClick={() => toggleTopicCovered(topic.id)}
+                                    className={`px-3 py-1.5 rounded-xl border text-xs font-medium transition-all min-h-[32px] ${
+                                      selected
+                                        ? 'border-primary bg-primary/20 text-text-primary'
+                                        : 'border-border-subtle bg-surface-2 text-text-secondary'
+                                    }`}
+                                  >
+                                    {selected ? '✓ ' : ''}{topic.name}
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+
+                    {classLogData.topics_covered.length > 0 && (
+                      <p className="text-xs text-primary">
+                        ✓ {classLogData.topics_covered.length} tema{classLogData.topics_covered.length !== 1 ? 's' : ''} seleccionado{classLogData.topics_covered.length !== 1 ? 's' : ''}
+                        {' '}— se marcarán como 🟡 vistos automáticamente
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Understanding level */}
+              <EmojiSelector
+                label="¿Cómo fue la comprensión en clase?"
+                options={UNDERSTANDING_OPTIONS}
+                value={classLogData.understanding_level}
+                onChange={v => setClassLogData(d => ({ ...d, understanding_level: v }))}
+              />
+
+              {/* Homework */}
+              <div className="mt-4 space-y-2">
+                <p className="text-sm font-medium text-text-secondary">¿Hay tarea o trabajo práctico?</p>
+                <div className="flex gap-3">
+                  {[true, false].map(v => (
+                    <button
+                      key={String(v)}
+                      onClick={() => setClassLogData(d => ({ ...d, has_homework: v }))}
+                      className={`flex-1 py-2.5 rounded-2xl border text-sm transition-all min-h-[44px] ${
+                        classLogData.has_homework === v
+                          ? 'border-primary bg-primary/20 text-text-primary'
+                          : 'border-border-subtle bg-surface-2 text-text-secondary'
+                      }`}
+                    >
+                      {v ? '✅ Sí' : '❌ No'}
+                    </button>
+                  ))}
+                </div>
+
+                {classLogData.has_homework && (
+                  <textarea
+                    value={classLogData.homework_description}
+                    onChange={e => setClassLogData(d => ({ ...d, homework_description: e.target.value }))}
+                    placeholder="Describí la tarea..."
+                    className="w-full h-20 px-4 py-3 rounded-2xl bg-surface-2 border border-border-subtle text-sm text-text-primary placeholder-text-secondary resize-none focus:outline-none focus:border-primary/60"
+                  />
+                )}
+              </div>
+
+              <div className="flex gap-3 mt-5">
+                <Button variant="secondary" className="flex-1" onClick={() => setShowClassLog(false)}>
+                  Cancelar
+                </Button>
+                <Button variant="primary" className="flex-1" onClick={saveClassLog} loading={logLoading}>
+                  Guardar registro
+                </Button>
+              </div>
             </div>
           </div>
         </div>
@@ -474,14 +660,14 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
                 value={eventData.title}
                 onChange={e => setEventData(d => ({ ...d, title: e.target.value }))}
                 placeholder="Título (ej: Primer Parcial)"
-                className="w-full h-11 px-4 rounded-2xl bg-surface-2 border border-border-subtle text-sm text-text-primary placeholder-text-secondary focus:outline-none focus:border-primary/60"
+                className={modalInput}
               />
 
               <input
                 type="date"
                 value={eventData.date}
                 onChange={e => setEventData(d => ({ ...d, date: e.target.value }))}
-                className="w-full h-11 px-4 rounded-2xl bg-surface-2 border border-border-subtle text-sm text-text-primary focus:outline-none focus:border-primary/60"
+                className={modalInput}
               />
 
               <textarea

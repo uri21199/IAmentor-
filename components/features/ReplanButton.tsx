@@ -1,10 +1,15 @@
 'use client'
 
 import { useState } from 'react'
+import { usePathname } from 'next/navigation'
 import Button from '@/components/ui/Button'
 
 export default function ReplanButton() {
+  const pathname = usePathname()
   const [open, setOpen] = useState(false)
+
+  // Only render on the /today page — not on check-in or other routes
+  if (pathname !== '/today') return null
   const [text, setText] = useState('')
   const [loading, setLoading] = useState(false)
   const [success, setSuccess] = useState(false)

@@ -28,7 +28,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="es" className={dmSans.variable}>
       <head>
         <meta name="theme-color" content="#0A0F1E" />
-        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
       </head>
       <body className="bg-background text-text-primary font-sans antialiased">
         {children}

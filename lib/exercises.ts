@@ -93,8 +93,9 @@ export async function fetchExercisesFromAPI(
 export function getWorkoutPlan(
   type: WorkoutType,
   energyLevel: number,
-  weekNumber: number
-): { exercises: Exercise[]; duration_minutes: number; description: string } {
+  weekNumber: number,
+  lastPerceivedEffort?: string | null
+): { exercises: Exercise[]; duration_minutes: number; description: string; coachTip: string } {
   const base = LOCAL_EXERCISES[type]
 
   // Progressive overload: increase sets/reps based on week
@@ -103,42 +104,72 @@ export function getWorkoutPlan(
   let exercises: Exercise[]
   let duration: number
   let description: string
+  let coachTip: string
 
   if (energyLevel <= 2) {
     // Low energy: mobility only
     exercises = LOCAL_EXERCISES.movilidad
     duration = 15
     description = 'Sesión de movilidad suave. Escuchá tu cuerpo, sin forzar.'
+    coachTip = 'Con poca energía, el movimiento suave acelera la recuperación más que el descanso total.'
   } else if (energyLevel === 3) {
     // Medium: maintenance session (less volume)
     exercises = base.slice(0, 4)
     duration = 35
     description = 'Sesión de mantenimiento. Técnica perfecta, volumen moderado.'
+    coachTip = 'Hoy priorizá la técnica sobre el volumen — construye la base para las sesiones intensas.'
   } else {
     // High energy: full session
     exercises = base
     duration = type === 'movilidad' ? 20 : 50
     description = 'Sesión completa. Progresión semana ' + weekNumber + '.'
+    coachTip = 'Excelente energía — aprovechá para superar tu marca de la semana pasada.'
   }
 
-  return { exercises, duration_minutes: duration, description }
+  // Adjust based on last perceived effort
+  if (lastPerceivedEffort === 'easy') {
+    // Add 1 extra set to each exercise and 5 min to duration
+    exercises = exercises.map(ex => ({
+      ...ex,
+      sets: ex.sets ? ex.sets + 1 : ex.sets,
+      notes: ex.notes ? ex.notes + ' (+1 serie extra)' : '+1 serie extra',
+    }))
+    duration = duration + 5
+    coachTip = 'La sesión anterior te resultó fácil — sumamos una serie extra por ejercicio para mantener el progreso.'
+  } else if (lastPerceivedEffort === 'exhausting') {
+    // Force mobility session for recovery
+    exercises = LOCAL_EXERCISES.movilidad
+    duration = 15
+    description = 'Sesión de recuperación activa. Tu cuerpo lo necesita hoy.'
+    coachTip = 'Después de un entrenamiento agotador, la movilidad activa acelera tu recuperación.'
+  } else if (lastPerceivedEffort === 'hard') {
+    // Reduce to 3 exercises and shorten duration
+    exercises = exercises.slice(0, 3)
+    duration = Math.max(15, duration - 5)
+    coachTip = 'Volumen reducido para que puedas recuperarte bien tras la sesión exigente anterior.'
+  }
+  // 'good' or null: maintain current plan (coachTip already set above)
+
+  return { exercises, duration_minutes: duration, description, coachTip }
 }
 
 export function getNextWorkoutType(
   lastWorkouts: Array<{ type: WorkoutType; date: string }>
 ): WorkoutType {
-  const strengthTypes: WorkoutType[] = ['empuje', 'jale', 'piernas']
-  const cardioTypes: WorkoutType[] = ['cardio', 'cardio']
+  const rotation: WorkoutType[] = ['empuje', 'jale', 'piernas', 'cardio']
 
-  // Get the last few workouts to determine rotation
-  const recentStrength = lastWorkouts
-    .filter(w => strengthTypes.includes(w.type))
-    .slice(0, 1)
+  // Find the last strength or cardio workout (ignore movilidad)
+  const relevantWorkouts = lastWorkouts.filter(w =>
+    w.type === 'empuje' || w.type === 'jale' || w.type === 'piernas' || w.type === 'cardio'
+  )
 
-  if (recentStrength.length === 0) return 'empuje'
+  if (relevantWorkouts.length === 0) return 'empuje'
 
-  const last = recentStrength[0].type
-  if (last === 'empuje') return 'jale'
-  if (last === 'jale') return 'piernas'
-  return 'empuje'
+  const lastType = relevantWorkouts[0].type
+  const currentIndex = rotation.indexOf(lastType)
+
+  if (currentIndex === -1) return 'empuje'
+
+  // Return the next type in the rotation, wrapping around
+  return rotation[(currentIndex + 1) % rotation.length]
 }

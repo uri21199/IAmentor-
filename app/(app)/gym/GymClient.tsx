@@ -45,6 +45,8 @@ export default function GymClient({
   const [workoutDone, setWorkoutDone] = useState(!!todayWorkout?.completed)
   const [showExercises, setShowExercises] = useState(false)
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false)
+  const [perceivedEffort, setPerceivedEffort] = useState<string>('')
 
   // Determine week number (number of weeks with at least one workout)
   const weekNumber = Math.max(1, Math.ceil(recentWorkouts.length / 5))
@@ -54,7 +56,8 @@ export default function GymClient({
     ? 'movilidad'
     : getNextWorkoutType(recentWorkouts)
 
-  const plan = getWorkoutPlan(nextType, energyLevel, weekNumber)
+  const lastPerceivedEffort = recentWorkouts[0]?.perceived_effort || null
+  const plan = getWorkoutPlan(nextType, energyLevel, weekNumber, lastPerceivedEffort)
 
   // Consistency stats
   const totalWorkouts = recentWorkouts.filter(w => w.completed).length
@@ -77,7 +80,7 @@ export default function GymClient({
     return streak
   }
 
-  async function logWorkout() {
+  async function logWorkout(felt: string) {
     setSaving(true)
     try {
       const { error } = await supabase.from('workouts').upsert({
@@ -88,9 +91,11 @@ export default function GymClient({
         energy_used: energyLevel,
         completed: true,
         exercises_json: plan.exercises,
+        perceived_effort: felt,
       })
       if (!error) {
         setWorkoutDone(true)
+        setShowFeedbackModal(false)
       }
     } catch (err) {
       console.error(err)
@@ -176,14 +181,20 @@ export default function GymClient({
             </button>
           )}
 
+          {/* Coach tip */}
+          {plan.coachTip && (
+            <div className="mb-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20">
+              <p className="text-xs text-amber-400">💡 {plan.coachTip}</p>
+            </div>
+          )}
+
           <Button
             variant="success"
             size="lg"
             className="w-full"
-            onClick={logWorkout}
-            loading={saving}
+            onClick={() => setShowFeedbackModal(true)}
           >
-            ✅ Marcar como completado
+            ✅ Completé el entrenamiento
           </Button>
         </Card>
       )}
@@ -212,6 +223,23 @@ export default function GymClient({
               </div>
             )
           })}
+        </div>
+      </div>
+
+      {/* Week goal */}
+      <div className="flex items-center justify-between p-4 rounded-2xl bg-surface-2 border border-border-subtle">
+        <div>
+          <p className="text-sm font-medium text-text-primary">Meta semanal</p>
+          <p className="text-xs text-text-secondary">{weeklyCount} de 3 sesiones</p>
+        </div>
+        <div className="flex gap-1.5">
+          {[0, 1, 2].map(i => (
+            <div key={i} className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${
+              i < weeklyCount ? 'bg-green-500/20 text-green-400 border border-green-500/40' : 'bg-surface border border-border-subtle text-text-secondary'
+            }`}>
+              {i < weeklyCount ? '✓' : '·'}
+            </div>
+          ))}
         </div>
       </div>
 
@@ -246,8 +274,58 @@ export default function GymClient({
                   </p>
                 </div>
                 {w.completed && <Badge variant="success">✓</Badge>}
+                {w.perceived_effort && (
+                  <span className="text-lg ml-1">
+                    {w.perceived_effort === 'easy' ? '😌' : w.perceived_effort === 'good' ? '💪' : w.perceived_effort === 'hard' ? '😤' : '💀'}
+                  </span>
+                )}
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Post-workout feedback modal */}
+      {showFeedbackModal && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center px-4 pt-4 pb-24 bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-3xl p-5 shadow-2xl">
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="text-base font-semibold text-text-primary">🏆 ¡Sesión completada!</h3>
+              <button onClick={() => setShowFeedbackModal(false)} className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary">✕</button>
+            </div>
+            <p className="text-sm text-text-secondary mb-4">¿Cómo te sentiste durante el entrenamiento?</p>
+            <div className="grid grid-cols-2 gap-3 mb-5">
+              {[
+                { value: 'easy', emoji: '😌', label: 'Muy fácil', desc: 'Podría haber dado más' },
+                { value: 'good', emoji: '💪', label: 'Perfecto', desc: 'Nivel ideal' },
+                { value: 'hard', emoji: '😤', label: 'Difícil', desc: 'Me costó bastante' },
+                { value: 'exhausting', emoji: '💀', label: 'Agotador', desc: 'Necesito recuperar' },
+              ].map(opt => (
+                <button
+                  key={opt.value}
+                  onClick={() => setPerceivedEffort(opt.value)}
+                  className={`p-4 rounded-2xl border text-left transition-all ${
+                    perceivedEffort === opt.value
+                      ? 'border-primary bg-primary/20'
+                      : 'border-border-subtle bg-surface-2'
+                  }`}
+                >
+                  <p className="text-2xl mb-1">{opt.emoji}</p>
+                  <p className="text-sm font-medium text-text-primary">{opt.label}</p>
+                  <p className="text-xs text-text-secondary">{opt.desc}</p>
+                </button>
+              ))}
+            </div>
+            <Button
+              variant="primary"
+              size="lg"
+              className="w-full"
+              onClick={() => logWorkout(perceivedEffort || 'good')}
+              loading={saving}
+              disabled={!perceivedEffort}
+            >
+              Guardar entrenamiento
+            </Button>
           </div>
         </div>
       )}

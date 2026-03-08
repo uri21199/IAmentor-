@@ -105,7 +105,7 @@ export default function SubjectsClient({
 
       {/* Subject cards */}
       {subjects.length > 0 ? (
-        <div className="space-y-3">
+        <div className="space-y-4">
           {subjects.map(subject => {
             const progress      = getProgress(subject)
             const nearestEvent  = getNearestEvent(subject.id)

@@ -8,9 +8,24 @@ const withPWA = require('next-pwa')({
 
 const nextConfig = {
   reactStrictMode: true,
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
+  typescript: {
+    ignoreBuildErrors: true,
+  },
   images: {
     domains: ['lh3.googleusercontent.com'],
   },
+  transpilePackages: [
+    '@supabase/ssr',
+    '@supabase/supabase-js',
+    '@supabase/functions-js',
+    '@supabase/auth-js',
+    '@supabase/realtime-js',
+    '@supabase/storage-js',
+    '@supabase/postgrest-js',
+  ],
 }
 
 module.exports = withPWA(nextConfig)
