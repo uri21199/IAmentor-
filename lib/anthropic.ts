@@ -138,7 +138,7 @@ Generá el JSON array directamente, sin markdown, sin explicaciones adicionales.
 export async function replanDay(
   currentPlan: TimeBlock[],
   change: string,
-  context: { energy_level: number; stress_level: string }
+  context: { energy_level: number; stress_level: string; unexpected_events?: string | null }
 ): Promise<TimeBlock[]> {
   // Argentina timezone: Vercel runs UTC, Argentina = UTC-3
   const now = getCurrentTimeArg()
@@ -158,13 +158,15 @@ ${change}
 ## CONTEXTO
 - Energía actual: ${context.energy_level}/5
 - Estrés: ${context.stress_level}
+- Imprevistos del día: ${context.unexpected_events || 'ninguno'}
 
 ## INSTRUCCIONES
 1. Mantené los bloques ya completados (completed: true) sin cambios
 2. Solo reorganizá los bloques pendientes a partir de ${now}
 3. Acomodá el cambio reportado manteniendo las prioridades académicas
-4. Respondé ÚNICAMENTE con el JSON array completo (incluyendo bloques ya completados)
-5. No uses markdown ni explicaciones`
+4. Respetá los imprevistos del día al reorganizar el plan
+5. Respondé ÚNICAMENTE con el JSON array completo (incluyendo bloques ya completados)
+6. No uses markdown ni explicaciones`
 
   const message = await anthropic.messages.create({
     model: 'claude-sonnet-4-5',

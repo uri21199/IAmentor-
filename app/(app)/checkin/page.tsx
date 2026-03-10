@@ -8,7 +8,28 @@ import { createClient } from '@/lib/supabase'
 import { EmojiSelector, SLEEP_OPTIONS, ENERGY_OPTIONS } from '@/components/ui/EmojiSelector'
 import Button from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
-import type { StressLevel, WorkMode, CheckInFormData, TravelSegment } from '@/types'
+import type { StressLevel, WorkMode, CheckInFormData } from '@/types'
+
+// Form-level type: uses start_time / end_time instead of duration_minutes
+interface TravelSegmentForm {
+  origin: string
+  destination: string
+  start_time: string  // "HH:MM"
+  end_time: string    // "HH:MM"
+}
+
+function minutesBetween(start: string, end: string): number {
+  const [sh, sm] = start.split(':').map(Number)
+  const [eh, em] = end.split(':').map(Number)
+  let diff = (eh * 60 + em) - (sh * 60 + sm)
+  if (diff <= 0) diff += 24 * 60  // handle overnight edge case
+  return Math.max(1, diff)
+}
+
+// Form state (replaces travel_route from CheckInFormData)
+interface CheckInForm extends Omit<CheckInFormData, 'travel_route'> {
+  travel_route: TravelSegmentForm[]
+}
 
 const STEPS = ['Estado', 'Trabajo', 'Facultad', 'Viaje', 'Resumen']
 
@@ -20,7 +41,7 @@ export default function CheckInPage() {
   const [loadingMsg, setLoadingMsg] = useState('')
   const [alreadyDone, setAlreadyDone] = useState(false)
 
-  const [form, setForm] = useState<CheckInFormData>({
+  const [form, setForm] = useState<CheckInForm>({
     sleep_quality: 3,
     energy_level: 3,
     stress_level: 'low',
@@ -84,12 +105,12 @@ export default function CheckInPage() {
       ...f,
       travel_route: [
         ...f.travel_route,
-        { origin: '', destination: '', duration_minutes: 30 },
+        { origin: '', destination: '', start_time: '07:00', end_time: '08:00' },
       ],
     }))
   }
 
-  function updateSegment(i: number, field: keyof TravelSegment, value: string | number) {
+  function updateSegment(i: number, field: keyof TravelSegmentForm, value: string) {
     setForm(f => ({
       ...f,
       travel_route: f.travel_route.map((seg, idx) =>
@@ -113,6 +134,15 @@ export default function CheckInPage() {
       if (!user) throw new Error('No autenticado')
 
       const today = format(new Date(), 'yyyy-MM-dd')
+      // Convert form segments (start/end times) → DB format (duration_minutes)
+      const travel_route_json = form.travel_route
+        .filter(s => s.origin && s.destination)
+        .map(s => ({
+          origin: s.origin,
+          destination: s.destination,
+          duration_minutes: minutesBetween(s.start_time, s.end_time),
+        }))
+
       const { error } = await supabase.from('checkins').upsert({
         user_id: user.id,
         date: today,
@@ -123,7 +153,7 @@ export default function CheckInPage() {
         has_faculty: form.has_faculty,
         faculty_mode: form.faculty_mode,
         faculty_subject: form.faculty_subject,
-        travel_route_json: form.travel_route,
+        travel_route_json,
         unexpected_events: form.unexpected_events || null,
       })
       if (error) throw error
@@ -153,7 +183,7 @@ export default function CheckInPage() {
       return !!form.faculty_mode && !!form.faculty_subject
     }
     if (step === 3) {
-      return form.travel_route.every(s => s.origin && s.destination)
+      return form.travel_route.every(s => s.origin && s.destination && s.start_time && s.end_time)
     }
     return true
   }
@@ -343,18 +373,18 @@ export default function CheckInPage() {
               <div>
                 <p className="text-sm font-medium text-text-primary">Ruta del día</p>
                 <p className="text-xs text-text-secondary mt-0.5">
-                  Agregá cada tramo de viaje (ida y vuelta separados)
+                  Agregá cada tramo (origen, destino y horario)
                 </p>
               </div>
               <Button variant="secondary" size="sm" onClick={addTravelSegment}>
-                + Agregar
+                + Agregar tramo
               </Button>
             </div>
 
             {form.travel_route.length === 0 && (
               <div className="text-center py-8">
                 <p className="text-3xl mb-2">🏠</p>
-                <p className="text-sm text-text-secondary">Sin viajes (quedás en casa)</p>
+                <p className="text-sm text-text-secondary">Sin viajes hoy (quedás en casa)</p>
               </div>
             )}
 
@@ -370,7 +400,8 @@ export default function CheckInPage() {
                   </button>
                 </div>
                 <div className="space-y-3">
-                  <div className="flex gap-2">
+                  {/* Origin → Destination */}
+                  <div className="flex items-center gap-2">
                     <input
                       type="text"
                       value={seg.origin}
@@ -380,7 +411,7 @@ export default function CheckInPage() {
                                  text-sm text-text-primary placeholder-text-secondary
                                  focus:outline-none focus:border-primary/50"
                     />
-                    <span className="flex items-center text-text-secondary">→</span>
+                    <span className="text-text-muted text-sm shrink-0">→</span>
                     <input
                       type="text"
                       value={seg.destination}
@@ -391,20 +422,40 @@ export default function CheckInPage() {
                                  focus:outline-none focus:border-primary/50"
                     />
                   </div>
-                  <div className="flex items-center gap-3">
-                    <p className="text-xs text-text-secondary whitespace-nowrap">⏱ Duración</p>
-                    <input
-                      type="number"
-                      min="5"
-                      max="300"
-                      value={seg.duration_minutes}
-                      onChange={e => updateSegment(i, 'duration_minutes', parseInt(e.target.value) || 30)}
-                      className="w-20 h-10 px-3 rounded-xl bg-surface border border-border-subtle
-                                 text-sm text-text-primary text-center
-                                 focus:outline-none focus:border-primary/50"
-                    />
-                    <p className="text-xs text-text-secondary">minutos</p>
+
+                  {/* Time range */}
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1">
+                      <p className="text-xs text-text-secondary mb-1">Salida</p>
+                      <input
+                        type="time"
+                        value={seg.start_time}
+                        onChange={e => updateSegment(i, 'start_time', e.target.value)}
+                        className="w-full h-10 px-3 rounded-xl bg-surface border border-border-subtle
+                                   text-sm text-text-primary
+                                   focus:outline-none focus:border-primary/50"
+                      />
+                    </div>
+                    <span className="text-text-muted text-sm pt-5 shrink-0">→</span>
+                    <div className="flex-1">
+                      <p className="text-xs text-text-secondary mb-1">Llegada</p>
+                      <input
+                        type="time"
+                        value={seg.end_time}
+                        onChange={e => updateSegment(i, 'end_time', e.target.value)}
+                        className="w-full h-10 px-3 rounded-xl bg-surface border border-border-subtle
+                                   text-sm text-text-primary
+                                   focus:outline-none focus:border-primary/50"
+                      />
+                    </div>
                   </div>
+
+                  {/* Duration preview */}
+                  {seg.start_time && seg.end_time && (
+                    <p className="text-xs text-text-secondary">
+                      ⏱ Duración estimada: {minutesBetween(seg.start_time, seg.end_time)} min
+                    </p>
+                  )}
                 </div>
               </Card>
             ))}
@@ -460,7 +511,7 @@ export default function CheckInPage() {
                     <p className="text-text-secondary mb-1">Viajes</p>
                     {form.travel_route.map((s, i) => (
                       <p key={i} className="text-text-primary text-xs">
-                        🚌 {s.origin} → {s.destination} ({s.duration_minutes}min)
+                        🚌 {s.origin} → {s.destination} ({s.start_time}–{s.end_time}, {minutesBetween(s.start_time, s.end_time)}min)
                       </p>
                     ))}
                   </div>

@@ -6,13 +6,12 @@ import Link from 'next/link'
 import { format, parseISO, differenceInDays } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { createClient } from '@/lib/supabase'
-import { Card, CardHeader, CardTitle } from '@/components/ui/Card'
 import { TimeBlock } from '@/components/ui/TimeBlock'
 import { Badge } from '@/components/ui/Badge'
 import { ProgressBar } from '@/components/ui/ProgressBar'
 import Button from '@/components/ui/Button'
 import NotificationBanner from '@/components/features/NotificationBanner'
-import { getGreeting, stressLabel } from '@/lib/utils'
+import { getGreeting } from '@/lib/utils'
 import { getDaysColor as getColor } from '@/lib/study-priority'
 import type { CheckIn, DailyPlan, TimeBlock as TimeBlockType, AppNotification } from '@/types'
 
@@ -182,6 +181,7 @@ export default function TodayClient({
   }
 
   // ── Move block up/down ────────────────────────────────────────────────────
+  // Times stay fixed to their position; only block content swaps
   async function moveBlock(id: string, direction: 'up' | 'down') {
     const idx = blocks.findIndex(b => b.id === id)
     if (idx < 0) return
@@ -190,7 +190,16 @@ export default function TodayClient({
 
     const updated = [...blocks]
     const swapIdx = direction === 'up' ? idx - 1 : idx + 1
+
+    // Preserve the time slots at each position
+    const timesAtIdx  = { start_time: updated[idx].start_time,  end_time: updated[idx].end_time  }
+    const timesAtSwap = { start_time: updated[swapIdx].start_time, end_time: updated[swapIdx].end_time }
+
+    // Swap full objects, then restore each position's original times
     ;[updated[idx], updated[swapIdx]] = [updated[swapIdx], updated[idx]]
+    updated[idx]    = { ...updated[idx],    ...timesAtIdx  }
+    updated[swapIdx] = { ...updated[swapIdx], ...timesAtSwap }
+
     setBlocks(updated)
     setBlockMenuId(null)
     await persistBlocks(updated)
@@ -275,72 +284,28 @@ export default function TodayClient({
           </Link>
         </div>
       ) : (
-        <Card variant="elevated">
-          <CardHeader>
-            <CardTitle>Check-in del día</CardTitle>
-            <Badge variant="success">Completado</Badge>
-          </CardHeader>
-          <div className="grid grid-cols-3 gap-3">
-            <div className="text-center">
-              <p className="text-2xl">
-                {['🪫','😮‍💨','⚡','🔥','🚀'][checkin.energy_level - 1]}
-              </p>
-              <p className="text-xs text-text-secondary mt-1">Energía {checkin.energy_level}/5</p>
-            </div>
-            <div className="text-center">
-              <p className="text-2xl">
-                {['😴','😕','😐','🙂','😁'][checkin.sleep_quality - 1]}
-              </p>
-              <p className="text-xs text-text-secondary mt-1">Sueño {checkin.sleep_quality}/5</p>
-            </div>
-            <div className="text-center">
-              <p className="text-2xl">
-                {checkin.stress_level === 'low' ? '😌' : checkin.stress_level === 'medium' ? '😤' : '😰'}
-              </p>
-              <p className="text-xs text-text-secondary mt-1">{stressLabel(checkin.stress_level)}</p>
-            </div>
-          </div>
-
-          {checkin.travel_route_json.length > 0 && (
-            <div className="mt-3 pt-3 border-t border-border-subtle">
-              <p className="text-xs text-text-secondary mb-1.5">🚌 Ruta del día</p>
-              <div className="space-y-1">
-                {checkin.travel_route_json.map((seg, i) => (
-                  <p key={i} className="text-xs text-text-primary">
-                    {seg.origin} → {seg.destination} ({seg.duration_minutes}min)
-                  </p>
-                ))}
-              </div>
-            </div>
-          )}
-        </Card>
-      )}
-
-      {/* Preview blocks (when no check-in but fixed schedule exists) */}
-      {!checkin && previewBlocks.length > 0 && (
-        <div>
-          <div className="flex items-center gap-2 mb-2">
-            <h2 className="text-base font-semibold text-text-primary">Tu día de hoy</h2>
-            <span className="px-2 py-0.5 rounded-full bg-surface-2 border border-border-subtle text-text-secondary text-xs">
-              Vista previa
-            </span>
-          </div>
-          <p className="text-xs text-text-secondary mb-3">
-            Tus bloques fijos (trabajo y clases). Completá el check-in para que la IA personalice el resto.
-          </p>
-          <div className="space-y-2 pointer-events-none opacity-60">
-            {previewBlocks.map(block => (
-              <TimeBlock key={block.id} block={block} onToggle={() => {}} />
-            ))}
+        <div className="flex items-center gap-3 px-4 py-2.5 rounded-2xl bg-surface border border-green-500/20">
+          <span className="text-green-400 text-lg">✓</span>
+          <p className="text-sm text-text-primary flex-1">Check-in completado</p>
+          <div className="flex items-center gap-1.5 text-sm">
+            <span>{['🪫','😮‍💨','⚡','🔥','🚀'][checkin.energy_level - 1]}</span>
+            <span>{['😴','😕','😐','🙂','😁'][checkin.sleep_quality - 1]}</span>
           </div>
         </div>
       )}
 
-      {/* Daily plan (only when check-in is done) */}
-      {checkin && (
+      {/* Daily plan — shown always when blocks exist (with or without check-in) */}
+      {(checkin || blocks.length > 0) && (
         <div>
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-base font-semibold text-text-primary">Plan del día</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-base font-semibold text-text-primary">Plan del día</h2>
+              {!checkin && blocks.length > 0 && (
+                <span className="px-2 py-0.5 rounded-full bg-surface-2 border border-border-subtle text-text-secondary text-xs">
+                  Horario base
+                </span>
+              )}
+            </div>
             {blocks.length > 0 && (
               <span className="text-sm text-text-secondary">{Math.round(completion)}% completado</span>
             )}
@@ -354,16 +319,20 @@ export default function TodayClient({
             <div className="text-center py-10">
               <p className="text-4xl mb-3">🤖</p>
               <p className="text-text-secondary text-sm mb-4">
-                La IA puede generar tu plan personalizado
+                {checkin
+                  ? 'La IA puede generar tu plan personalizado'
+                  : 'Completá el check-in para generar tu plan con IA'}
               </p>
-              <Button
-                variant="primary"
-                onClick={generatePlan}
-                loading={generating}
-                disabled={generating}
-              >
-                Generar plan con IA ✨
-              </Button>
+              {checkin && (
+                <Button
+                  variant="primary"
+                  onClick={generatePlan}
+                  loading={generating}
+                  disabled={generating}
+                >
+                  Generar plan con IA ✨
+                </Button>
+              )}
             </div>
           ) : (
             <div className="space-y-2">
@@ -420,15 +389,17 @@ export default function TodayClient({
                 </div>
               ))}
 
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full mt-2 text-text-secondary"
-                onClick={generatePlan}
-                loading={generating}
-              >
-                🔄 Regenerar plan
-              </Button>
+              {checkin && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full mt-2 text-text-secondary"
+                  onClick={generatePlan}
+                  loading={generating}
+                >
+                  🔄 Regenerar plan
+                </Button>
+              )}
             </div>
           )}
         </div>

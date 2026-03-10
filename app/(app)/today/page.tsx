@@ -100,6 +100,31 @@ export default async function TodayPage({
     previewBlocks.sort((a, b) => a.start_time.localeCompare(b.start_time))
   }
 
+  // ── Auto-save preview blocks as a real plan if no plan exists yet ────────
+  // This ensures every day has a plan based on the fixed schedule,
+  // even before the user completes their check-in.
+  let activePlan = plan as DailyPlan | null
+  if (!activePlan && previewBlocks.length > 0) {
+    try {
+      await supabase.from('daily_plans').upsert({
+        user_id: user.id,
+        date: today,
+        plan_json: previewBlocks,
+        completion_percentage: 0,
+      }, { onConflict: 'user_id,date' })
+      activePlan = {
+        id: '',
+        user_id: user.id,
+        date: today,
+        plan_json: previewBlocks,
+        completion_percentage: 0,
+        created_at: new Date().toISOString(),
+      }
+    } catch {
+      // Non-critical: fall back to preview-only display
+    }
+  }
+
   // Sort units by order_index for the edit dropdowns
   const subjectsData = (subjectsForEdit || []).map((s: any) => ({
     ...s,
@@ -112,7 +137,7 @@ export default async function TodayPage({
     <TodayClient
       user={user}
       checkin={checkin as CheckIn | null}
-      plan={plan as DailyPlan | null}
+      plan={activePlan}
       upcomingEvents={(events || []) as any[]}
       energyHistory={energyHistory || []}
       today={today}

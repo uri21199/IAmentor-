@@ -31,10 +31,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No plan found for today' }, { status: 400 })
     }
 
-    // Get check-in for context
+    // Get check-in for context (including unexpected_events so they're preserved)
     const { data: checkin } = await supabase
       .from('checkins')
-      .select('energy_level, stress_level')
+      .select('energy_level, stress_level, unexpected_events')
       .eq('user_id', user.id)
       .eq('date', today)
       .single()
@@ -45,6 +45,7 @@ export async function POST(req: NextRequest) {
       {
         energy_level: checkin?.energy_level || 3,
         stress_level: checkin?.stress_level || 'low',
+        unexpected_events: checkin?.unexpected_events || null,
       }
     )
 
