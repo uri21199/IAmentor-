@@ -45,6 +45,7 @@ export default async function SubjectDetailPage({ params }: { params: { id: stri
     .from('academic_events')
     .select('*')
     .eq('subject_id', params.id)
+    .eq('user_id', user.id)
     .order('date', { ascending: true })
 
   // Fetch recent class logs

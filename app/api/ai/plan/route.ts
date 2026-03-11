@@ -28,8 +28,17 @@ export async function POST() {
       .eq('date', today)
       .single()
 
-    if (!checkin) {
-      return NextResponse.json({ error: 'No check-in found for today' }, { status: 400 })
+    // Use default values if no check-in yet — plan will be schedule-based
+    const effectiveCheckin = checkin ?? {
+      energy_level: 3,
+      stress_level: 'low' as const,
+      work_mode: 'remoto' as const,
+      has_faculty: false,
+      faculty_mode: null,
+      faculty_subject: null,
+      travel_route_json: [] as any[],
+      unexpected_events: null,
+      sleep_quality: 3,
     }
 
     // ── 2. Get active semester with subjects ────────────────
@@ -127,15 +136,15 @@ export async function POST() {
     if (userConfig) {
       const workDays: number[] = userConfig.work_days_json || [1, 2, 3, 4, 5]
       const isWorkDay = workDays.includes(todayDow)
-      if (isWorkDay && checkin.work_mode !== 'no_work' && checkin.work_mode !== 'libre') {
-        const workTitle = checkin.work_mode === 'presencial' ? '💼 Trabajo presencial' : '🏠 Trabajo remoto'
+      if (isWorkDay && effectiveCheckin.work_mode !== 'no_work' && effectiveCheckin.work_mode !== 'libre') {
+        const workTitle = effectiveCheckin.work_mode === 'presencial' ? '💼 Trabajo presencial' : '🏠 Trabajo remoto'
         fixedBlocks.push({
           id: 'fixed_work',
           start_time: userConfig.work_start,
           end_time: userConfig.work_end,
           type: 'work',
           title: workTitle,
-          description: `Horario laboral — ${checkin.work_mode}`,
+          description: `Horario laboral — ${effectiveCheckin.work_mode}`,
           completed: false,
           priority: 'medium',
         })
@@ -169,7 +178,7 @@ export async function POST() {
       return `${String(Math.floor(tot / 60)).padStart(2, '0')}:${String(tot % 60).padStart(2, '0')}`
     }
 
-    const travelSegments: TravelSegment[] = checkin.travel_route_json || []
+    const travelSegments: TravelSegment[] = effectiveCheckin.travel_route_json || []
     if (travelSegments.length > 0) {
       const sortedFixed = [...fixedBlocks].sort((a, b) => a.start_time.localeCompare(b.start_time))
       const firstStart = sortedFixed[0]?.start_time || '09:00'
@@ -219,7 +228,7 @@ export async function POST() {
 
     // ── 7. Build context and call Claude ───────────────────
     const context: PlanGenerationContext = {
-      checkin,
+      checkin: effectiveCheckin as any,
       calendar_events: calendarEvents,
       subjects_with_topics: subjectsWithDetails,
       academic_events: academicEvents,

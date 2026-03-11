@@ -56,6 +56,17 @@ export async function POST(req: NextRequest) {
       .eq('user_id', user.id)
       .eq('date', today)
 
+    // Append the replan change to unexpected_events so future replans remember it
+    if (checkin) {
+      const existingEvents = checkin.unexpected_events || ''
+      const separator = existingEvents ? '\n---\n' : ''
+      await supabase
+        .from('checkins')
+        .update({ unexpected_events: existingEvents + separator + change })
+        .eq('user_id', user.id)
+        .eq('date', today)
+    }
+
     return NextResponse.json({ blocks: updatedBlocks })
   } catch (err: any) {
     console.error('Replan error:', err)

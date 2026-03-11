@@ -42,15 +42,16 @@ export interface Topic {
   created_at: string
 }
 
-export type AcademicEventType = 'parcial' | 'parcial_intermedio' | 'entrega_tp'
+export type AcademicEventType = 'parcial' | 'parcial_intermedio' | 'entrega_tp' | 'medico' | 'personal'
 
 export interface AcademicEvent {
   id: string
-  subject_id: string
+  subject_id: string | null
   user_id: string
   type: AcademicEventType
   title: string
   date: string
+  /** JSON-encoded object { time?, aula?, topic_ids?, _notes? } or plain string */
   notes: string | null
   created_at: string
 }
@@ -62,6 +63,8 @@ export interface TravelSegment {
   origin: string
   destination: string
   duration_minutes: number
+  departure_time?: string  // "HH:MM"
+  arrival_time?: string    // "HH:MM"
 }
 
 export interface CheckIn {

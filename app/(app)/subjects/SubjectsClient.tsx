@@ -120,20 +120,26 @@ export default function SubjectsClient({
 
   return (
     <div className="space-y-5">
-      {/* Page header */}
+      {/* Page header — semester badge + new button */}
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold text-text-primary">Materias 📚</h1>
-          <p className="text-text-secondary text-sm mt-0.5">{semesterName}</p>
-        </div>
-        <Button variant="secondary" size="sm" onClick={() => setShowNewSubject(true)}>
-          + Nueva
-        </Button>
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-surface-2 border border-border-subtle text-xs text-text-secondary">
+          <span className="w-1.5 h-1.5 rounded-full bg-primary" />
+          {semesterName}
+        </span>
+        <button
+          onClick={() => setShowNewSubject(true)}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-2xl bg-primary text-white text-sm font-medium active:scale-95 transition-transform"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+          </svg>
+          Nueva
+        </button>
       </div>
 
       {/* Subject cards */}
       {subjects.length > 0 ? (
-        <div className="space-y-5">
+        <div className="space-y-3">
           {subjects.map(subject => {
             const progress      = getProgress(subject)
             const nearestEvent  = getNearestEvent(subject.id)
@@ -143,63 +149,82 @@ export default function SubjectsClient({
 
             return (
               <Link key={subject.id} href={`/subjects/${subject.id}`}>
-                <Card variant="elevated" className="active:scale-[0.98] transition-transform cursor-pointer">
-                  <CardHeader>
-                    <div className="flex items-center gap-2">
-                      <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: subject.color }} />
-                      <CardTitle className="line-clamp-1">{subject.name}</CardTitle>
+                <div className="flex rounded-3xl bg-surface-2 border border-border-subtle overflow-hidden active:scale-[0.98] transition-transform cursor-pointer">
+                  {/* Left color accent */}
+                  <div className="w-1 shrink-0 rounded-l-3xl" style={{ backgroundColor: subject.color }} />
+
+                  <div className="flex-1 p-4 min-w-0">
+                    {/* Title row */}
+                    <div className="flex items-start justify-between gap-2 mb-3">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <p className="text-sm font-semibold text-text-primary truncate">{subject.name}</p>
+                        {progress.total > 0 && (
+                          <span className="text-xs text-text-secondary shrink-0">{progress.total} temas</span>
+                        )}
+                      </div>
+                      {nearestEvent && daysToEvent !== null && (
+                        <Badge variant={
+                          getDaysColor(daysToEvent) === 'red'   ? 'danger'  :
+                          getDaysColor(daysToEvent) === 'amber' ? 'warning' : 'success'
+                        }>
+                          {daysToEvent === 0 ? 'Hoy' : `${daysToEvent}d`}
+                        </Badge>
+                      )}
                     </div>
-                    {nearestEvent && daysToEvent !== null && (
-                      <Badge variant={
-                        getDaysColor(daysToEvent) === 'red'   ? 'danger'  :
-                        getDaysColor(daysToEvent) === 'amber' ? 'warning' : 'success'
-                      }>
-                        {nearestEvent.type === 'parcial' ? '📝' :
-                         nearestEvent.type === 'parcial_intermedio' ? '📋' : '📄'}{' '}
-                        {daysToEvent === 0 ? 'Hoy' : `${daysToEvent}d`}
-                      </Badge>
+
+                    {/* Progress bar */}
+                    <ProgressBar value={progress.pct} color="green" size="sm" className="mb-2.5" />
+
+                    {/* Stats row */}
+                    <div className="flex items-center gap-3 text-xs">
+                      <div className="flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-green-500 shrink-0" />
+                        <span className="text-text-secondary">{progress.green}</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
+                        <span className="text-text-secondary">{progress.yellow}</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" />
+                        <span className="text-text-secondary">{progress.red}</span>
+                      </div>
+                      <span className="ml-auto text-text-secondary font-medium" style={{ color: subject.color }}>
+                        {progress.pct}%
+                      </span>
+                    </div>
+
+                    {/* Next event footer */}
+                    {nearestEvent && (
+                      <div className="mt-3 pt-3 border-t border-border-subtle flex items-center gap-2">
+                        <svg className="w-3.5 h-3.5 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                        <p className="text-xs text-text-secondary truncate">
+                          {nearestEvent.title}
+                          <span className="text-text-primary ml-1">{format(parseISO(nearestEvent.date), 'dd/MM')}</span>
+                        </p>
+                      </div>
                     )}
-                  </CardHeader>
-
-                  <ProgressBar value={progress.pct} color="green" size="sm" className="mb-3" />
-
-                  <div className="flex items-center gap-4 text-xs">
-                    <div className="flex items-center gap-1">
-                      <span className="w-2 h-2 rounded-full bg-green-500" />
-                      <span className="text-text-secondary">{progress.green} dominados</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="w-2 h-2 rounded-full bg-amber-500" />
-                      <span className="text-text-secondary">{progress.yellow} con dudas</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="w-2 h-2 rounded-full bg-red-500" />
-                      <span className="text-text-secondary">{progress.red} pendientes</span>
-                    </div>
                   </div>
-
-                  {nearestEvent && (
-                    <div className="mt-3 pt-3 border-t border-border-subtle">
-                      <p className="text-xs text-text-secondary">
-                        Próximo: <span className="text-text-primary">{nearestEvent.title}</span>{' '}
-                        — {format(parseISO(nearestEvent.date), 'dd/MM')}
-                      </p>
-                    </div>
-                  )}
-                </Card>
+                </div>
               </Link>
             )
           })}
         </div>
       ) : (
-        <div className="text-center py-16">
-          <p className="text-4xl mb-3">📖</p>
-          <p className="text-text-secondary text-sm">No hay materias cargadas</p>
-          <p className="text-xs text-text-secondary mt-1 mb-5">
+        <div className="rounded-3xl bg-surface-2 border border-border-subtle p-10 text-center">
+          <div className="w-16 h-16 rounded-3xl bg-primary/10 flex items-center justify-center mx-auto mb-4">
+            <svg className="w-8 h-8 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+            </svg>
+          </div>
+          <p className="text-sm font-semibold text-text-primary mb-1">Sin materias cargadas</p>
+          <p className="text-xs text-text-secondary mb-5">
             Agregá tu primera materia para empezar a organizar tu cursada
           </p>
           <Button variant="primary" size="md" onClick={() => setShowNewSubject(true)}>
-            + Agregar primera materia
+            Agregar primera materia
           </Button>
         </div>
       )}
@@ -207,33 +232,42 @@ export default function SubjectsClient({
       {/* ── New Subject Modal ──────────────────────────────────── */}
       {showNewSubject && (
         <div className="fixed inset-0 z-50 flex items-end justify-center px-4 pt-4 pb-24 bg-black/60 backdrop-blur-sm">
-          <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-3xl p-5 shadow-2xl">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-base font-semibold text-text-primary">📚 Nueva materia</h3>
+          <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-3xl shadow-2xl">
+            {/* Modal header */}
+            <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-border-subtle">
+              <h3 className="text-base font-semibold text-text-primary">Nueva materia</h3>
               <button
                 onClick={() => setShowNewSubject(false)}
                 className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary"
               >
-                ✕
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
               </button>
             </div>
 
-            <div className="space-y-4">
-              <div>
-                <p className="text-xs text-text-secondary mb-1.5">Nombre de la materia</p>
-                <input
-                  type="text"
-                  value={form.name}
-                  onChange={e => setForm(p => ({ ...p, name: e.target.value }))}
-                  onKeyDown={e => e.key === 'Enter' && createSubject()}
-                  placeholder="Ej: Cálculo I, Anatomía, Algoritmos..."
-                  autoFocus
-                  className="w-full h-11 px-4 rounded-2xl bg-surface-2 border border-border-subtle text-sm text-text-primary placeholder-text-secondary focus:outline-none focus:border-primary/60"
-                />
+            <div className="px-5 py-4 space-y-3">
+              {/* Name field */}
+              <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden">
+                <div className="flex items-center gap-3 px-4 py-3">
+                  <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                  <input
+                    type="text"
+                    value={form.name}
+                    onChange={e => setForm(p => ({ ...p, name: e.target.value }))}
+                    onKeyDown={e => e.key === 'Enter' && createSubject()}
+                    placeholder="Nombre de la materia"
+                    autoFocus
+                    className="flex-1 bg-transparent text-sm text-text-primary placeholder-text-secondary focus:outline-none"
+                  />
+                </div>
               </div>
 
-              <div>
-                <p className="text-xs text-text-secondary mb-2">Color identificador</p>
+              {/* Color picker */}
+              <div className="rounded-2xl bg-surface-2 border border-border-subtle px-4 py-3">
+                <p className="text-xs text-text-secondary mb-2.5">Color identificador</p>
                 <div className="flex gap-2 flex-wrap">
                   {SUBJECT_COLORS.map(color => (
                     <button
@@ -248,45 +282,53 @@ export default function SubjectsClient({
                     />
                   ))}
                 </div>
-
                 {/* Preview */}
-                <div className="mt-3 flex items-center gap-2 p-3 rounded-xl bg-surface-2">
-                  <div className="w-3 h-3 rounded-full" style={{ backgroundColor: form.color }} />
-                  <span className="text-sm text-text-primary">{form.name || 'Nombre de la materia'}</span>
+                <div className="mt-3 flex items-center gap-2.5 p-2.5 rounded-xl bg-surface border border-border-subtle">
+                  <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: form.color }} />
+                  <span className="text-sm text-text-primary truncate">{form.name || 'Nombre de la materia'}</span>
                 </div>
               </div>
 
-              {/* ── AI syllabus upload (optional) ───────────────── */}
-              <div>
-                <p className="text-xs text-text-secondary mb-1.5">Temario con IA <span className="text-primary/60">(opcional)</span></p>
-                <label className="flex items-center gap-2 p-3 rounded-2xl border border-dashed border-border-subtle bg-surface-2 cursor-pointer hover:border-primary/50 transition-colors">
-                  <input
-                    type="file"
-                    accept="image/*,.pdf"
-                    onChange={e => {
-                      setSyllabus(e.target.files?.[0] ?? null)
-                      setSyllabusResult(null)
-                    }}
-                    className="hidden"
-                  />
-                  {syllabus ? (
-                    <span className="text-sm text-text-primary truncate">📎 {syllabus.name}</span>
-                  ) : (
-                    <span className="text-sm text-text-secondary">📤 Subir programa/syllabus (imagen o PDF)</span>
-                  )}
-                </label>
+              {/* AI syllabus upload */}
+              <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden">
+                <div className="flex items-center gap-3 px-4 py-3">
+                  <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+                  </svg>
+                  <label className="flex-1 flex items-center justify-between cursor-pointer">
+                    <span className="text-sm text-text-secondary">
+                      {syllabus ? syllabus.name : 'Temario con IA'}
+                    </span>
+                    <span className="text-xs text-primary font-medium">
+                      {syllabus ? 'Cambiar' : 'Subir PDF'}
+                    </span>
+                    <input
+                      type="file"
+                      accept="image/*,.pdf"
+                      onChange={e => {
+                        setSyllabus(e.target.files?.[0] ?? null)
+                        setSyllabusResult(null)
+                      }}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
                 {syllabusResult && (
-                  <p className="text-xs text-green-400 mt-1.5">
-                    ✅ {syllabusResult.units} unidades y {syllabusResult.topics} temas importados
-                  </p>
+                  <div className="px-4 pb-3 -mt-1">
+                    <p className="text-xs text-green-400">
+                      {syllabusResult.units} unidades y {syllabusResult.topics} temas importados
+                    </p>
+                  </div>
                 )}
                 {syllabus && syllabus.size > 3_000_000 && (
-                  <p className="text-xs text-red-400 mt-1.5">⚠️ Archivo demasiado grande (máx 3MB)</p>
+                  <div className="px-4 pb-3 -mt-1">
+                    <p className="text-xs text-red-400">Archivo demasiado grande (max 3MB)</p>
+                  </div>
                 )}
               </div>
             </div>
 
-            <div className="flex gap-3 mt-5">
+            <div className="flex gap-3 px-5 pb-5">
               <Button variant="secondary" className="flex-1" onClick={() => setShowNewSubject(false)}>
                 Cancelar
               </Button>
@@ -297,7 +339,7 @@ export default function SubjectsClient({
                 loading={saving || parsingSyllabus}
                 disabled={!form.name.trim() || (syllabus !== null && syllabus.size > 3_000_000)}
               >
-                {parsingSyllabus ? '⏳ Importando temario...' : 'Crear materia'}
+                {parsingSyllabus ? 'Importando...' : 'Crear materia'}
               </Button>
             </div>
           </div>

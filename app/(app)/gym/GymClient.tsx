@@ -105,25 +105,24 @@ export default function GymClient({
   }
 
   return (
-    <div className="px-4 pt-6 pb-4 space-y-5 max-w-lg mx-auto">
-      {/* Header */}
-      <div>
-        <h1 className="text-xl font-bold text-text-primary">Entrenamiento 💪</h1>
-        <p className="text-text-secondary text-sm mt-0.5">
+    <div className="px-4 pt-4 pb-28 space-y-5 max-w-lg mx-auto">
+      {/* Date + energy context strip */}
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-text-secondary capitalize">
           {format(parseISO(today), "EEEE d 'de' MMMM", { locale: es })}
         </p>
+        <span className="text-xs text-text-secondary">{ENERGY_LABEL[energyLevel]}</span>
       </div>
 
       {/* Energy & session type */}
-      <Card className="gradient-energy border border-green-500/20">
-        <div className="flex items-center justify-between mb-2">
+      <Card className="bg-green-500/10 border border-green-500/20">
+        <div className="flex items-center justify-between">
           <div>
-            <p className="text-xs text-text-secondary">Energía hoy</p>
-            <p className="text-lg font-bold text-text-primary">{ENERGY_LABEL[energyLevel]}</p>
-          </div>
-          <div className="text-right">
-            <p className="text-xs text-text-secondary">Tipo de sesión</p>
+            <p className="text-xs text-text-secondary mb-0.5">Sesión recomendada</p>
             <p className="text-sm font-semibold text-green-400">{ENERGY_SESSION[energyLevel]}</p>
+          </div>
+          <div className="w-10 h-10 rounded-2xl bg-green-500/20 flex items-center justify-center text-xl">
+            💪
           </div>
         </div>
       </Card>

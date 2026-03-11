@@ -87,11 +87,13 @@ export default function StatsClient({
   }
 
   return (
-    <div className="px-4 pt-6 pb-4 space-y-5 max-w-lg mx-auto">
-      {/* Header */}
-      <div>
-        <h1 className="text-xl font-bold text-text-primary">Estadísticas 📊</h1>
-        <p className="text-text-secondary text-sm mt-0.5">Últimos 30 días</p>
+    <div className="px-4 pt-4 pb-28 space-y-5 max-w-lg mx-auto">
+      {/* Period badge */}
+      <div className="flex items-center gap-2">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-surface-2 border border-border-subtle text-xs text-text-secondary">
+          <span className="w-1.5 h-1.5 rounded-full bg-primary" />
+          Últimos 30 días
+        </span>
       </div>
 
       {/* Key metrics */}

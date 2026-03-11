@@ -64,7 +64,7 @@ export default async function SubjectsPage() {
     .order('date', { ascending: true })
 
   return (
-    <div className="px-4 pt-6 pb-4 max-w-lg mx-auto">
+    <div className="px-4 pt-4 pb-28 max-w-lg mx-auto">
       <SubjectsClient
         semesterId={semester.id}
         semesterName={semester.name}

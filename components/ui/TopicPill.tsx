@@ -6,12 +6,13 @@ import type { Topic, TopicStatus } from '@/types'
 interface TopicPillProps {
   topic: Topic
   onStatusChange?: (topicId: string, status: TopicStatus) => void
+  onMenu?: () => void
   compact?: boolean
 }
 
 const STATUS_CYCLE: TopicStatus[] = ['red', 'yellow', 'green']
 
-export function TopicPill({ topic, onStatusChange, compact = false }: TopicPillProps) {
+export function TopicPill({ topic, onStatusChange, onMenu, compact = false }: TopicPillProps) {
   const colorClass = topicStatusColor(topic.status as TopicStatus)
   const icon = topicStatusIcon(topic.status as TopicStatus)
 
@@ -24,18 +25,25 @@ export function TopicPill({ topic, onStatusChange, compact = false }: TopicPillP
 
   if (compact) {
     return (
-      <button
-        onClick={handleCycle}
-        className={`
-          inline-flex items-center gap-1 px-2 py-1 rounded-xl border text-xs font-medium
-          transition-all duration-200 active:scale-95 min-h-[36px]
-          ${colorClass}
-        `}
-        title={topic.full_description || topic.name}
-      >
-        <span>{icon}</span>
-        <span className="truncate max-w-[120px]">{topic.name}</span>
-      </button>
+      <div className={`inline-flex items-center rounded-xl border text-xs font-medium transition-all duration-200 ${colorClass}`}>
+        <button
+          onClick={handleCycle}
+          className="flex items-center gap-1 px-2 py-1 min-h-[36px] active:scale-95"
+          title={topic.full_description || topic.name}
+        >
+          <span>{icon}</span>
+          <span className="truncate max-w-[120px]">{topic.name}</span>
+        </button>
+        {onMenu && (
+          <button
+            onClick={e => { e.stopPropagation(); onMenu() }}
+            className="px-1.5 min-h-[36px] border-l border-current/20 text-current/60 hover:text-current transition-colors"
+            title="Opciones"
+          >
+            ···
+          </button>
+        )}
+      </div>
     )
   }
 

@@ -4,13 +4,13 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { format, parseISO, differenceInDays } from 'date-fns'
+import { es } from 'date-fns/locale'
 import { createClient } from '@/lib/supabase'
 import { Card, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import { ProgressBar } from '@/components/ui/ProgressBar'
 import { TopicPill } from '@/components/ui/TopicPill'
 import Button from '@/components/ui/Button'
-import { EmojiSelector, UNDERSTANDING_OPTIONS } from '@/components/ui/EmojiSelector'
 import { getDaysColor, getEventTypeLabel } from '@/lib/study-priority'
 import type { SubjectWithDetails, AcademicEvent, Topic, TopicStatus, AcademicEventType } from '@/types'
 
@@ -98,6 +98,19 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
     date: '',
     notes: '',
   })
+
+  // ── Class log view mode ───────────────────────────────────
+  const [viewingLog, setViewingLog] = useState<any | null>(null)
+
+  // ── Topic CRUD ────────────────────────────────────────────
+  const [topicActionMenu, setTopicActionMenu] = useState<{ id: string; name: string; unitId: string } | null>(null)
+  const [renamingTopic, setRenamingTopic] = useState<{ id: string; name: string; unitId: string } | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [movingTopic, setMovingTopic] = useState<{ id: string; name: string; fromUnitId: string } | null>(null)
+  const [topicActionLoading, setTopicActionLoading] = useState(false)
+
+  // ── Collapsible units in class log modal ──────────────────
+  const [classLogCollapsed, setClassLogCollapsed] = useState<Record<string, boolean>>({})
   const [editEventLoading, setEditEventLoading] = useState(false)
 
   // ── Local events state ────────────────────────────────────
@@ -437,6 +450,48 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
     }
   }
 
+  // ── Topic CRUD handlers ───────────────────────────────────
+  async function deleteTopic(topicId: string, unitId: string) {
+    await supabase.from('topics').delete().eq('id', topicId)
+    setUnitTopics(prev => ({ ...prev, [unitId]: prev[unitId].filter(t => t.id !== topicId) }))
+    setTopicActionMenu(null)
+    router.refresh()
+  }
+
+  async function saveRenameTopic() {
+    if (!renamingTopic || !renameValue.trim()) return
+    setTopicActionLoading(true)
+    try {
+      await supabase.from('topics').update({ name: renameValue.trim() }).eq('id', renamingTopic.id)
+      setUnitTopics(prev => ({
+        ...prev,
+        [renamingTopic.unitId]: prev[renamingTopic.unitId].map(t =>
+          t.id === renamingTopic.id ? { ...t, name: renameValue.trim() } : t
+        ),
+      }))
+      setRenamingTopic(null)
+    } finally {
+      setTopicActionLoading(false)
+    }
+  }
+
+  async function saveMoveTopic(toUnitId: string) {
+    if (!movingTopic || movingTopic.fromUnitId === toUnitId) return
+    setTopicActionLoading(true)
+    try {
+      await supabase.from('topics').update({ unit_id: toUnitId }).eq('id', movingTopic.id)
+      const topic = unitTopics[movingTopic.fromUnitId].find(t => t.id === movingTopic.id)!
+      setUnitTopics(prev => ({
+        ...prev,
+        [movingTopic.fromUnitId]: prev[movingTopic.fromUnitId].filter(t => t.id !== movingTopic.id),
+        [toUnitId]: [...(prev[toUnitId] || []), topic],
+      }))
+      setMovingTopic(null)
+    } finally {
+      setTopicActionLoading(false)
+    }
+  }
+
   // ── Computed stats ────────────────────────────────────────
   const allTopics    = Object.values(unitTopics).flat()
   const total        = allTopics.length
@@ -455,7 +510,7 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
   const modalInput  = 'w-full h-11 px-4 rounded-2xl bg-surface-2 border border-border-subtle text-sm text-text-primary placeholder-text-secondary focus:outline-none focus:border-primary/60'
 
   return (
-    <div className="px-4 pt-6 pb-4 space-y-5 max-w-lg mx-auto">
+    <div className="px-4 pt-4 pb-28 space-y-5 max-w-lg mx-auto">
 
       {/* Header */}
       <div className="flex items-center gap-3">
@@ -513,44 +568,33 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
           <h2 className="text-sm font-semibold text-text-primary mb-2">Historial de clases</h2>
           <div className="space-y-2">
             {visibleLogs.map(log => (
-              <div key={log.id} className="flex items-center gap-3 p-3 rounded-2xl bg-surface border border-border-subtle">
+              <button
+                key={log.id}
+                onClick={() => setViewingLog(log)}
+                className="w-full flex items-center gap-3 p-3 rounded-2xl bg-surface border border-border-subtle text-left active:scale-[0.98] transition-transform"
+              >
+                <div className="w-9 h-9 rounded-xl bg-surface-2 flex items-center justify-center text-base shrink-0">
+                  {['😕','😐','🙂','😊','🤩'][log.understanding_level - 1]}
+                </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs text-text-secondary">
-                      {format(parseISO(log.date), 'dd/MM')}
-                    </span>
-                    <span className="text-sm">
-                      {['😕','😐','🙂','😊','🤩'][log.understanding_level - 1]}
+                    <span className="text-sm font-medium text-text-primary">
+                      {format(parseISO(log.date), "d 'de' MMMM", { locale: es })}
                     </span>
                     {log.has_homework && (
-                      <span className="text-xs bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded-full">
-                        📄 Tarea{log.due_date ? ` — ${format(parseISO(log.due_date), 'dd/MM')}` : ''}
-                      </span>
+                      <span className="text-xs bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded-full">📄 Tarea</span>
                     )}
                   </div>
                   {log.topics_covered_json?.length > 0 && (
-                    <p className="text-xs text-text-secondary mt-0.5 truncate">
+                    <p className="text-xs text-text-secondary mt-0.5">
                       {log.topics_covered_json.length} tema{log.topics_covered_json.length !== 1 ? 's' : ''} vistos
                     </p>
                   )}
                 </div>
-                <div className="flex gap-1 shrink-0">
-                  <button
-                    onClick={() => openClassLog(log)}
-                    className="w-8 h-8 flex items-center justify-center rounded-xl bg-surface-2 text-text-secondary hover:text-text-primary transition-colors text-sm"
-                    title="Editar"
-                  >
-                    ✎
-                  </button>
-                  <button
-                    onClick={() => deleteClassLog(log.id)}
-                    className="w-8 h-8 flex items-center justify-center rounded-xl bg-red-500/10 text-red-400 hover:text-red-300 transition-colors text-sm"
-                    title="Eliminar"
-                  >
-                    🗑
-                  </button>
-                </div>
-              </div>
+                <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
             ))}
           </div>
           {/* Logs accordion toggle */}
@@ -746,7 +790,13 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
 
               <div className="flex flex-wrap gap-2">
                 {visibleTopics.map(topic => (
-                  <TopicPill key={topic.id} topic={topic} onStatusChange={handleTopicStatusChange} compact />
+                  <TopicPill
+                    key={topic.id}
+                    topic={topic}
+                    onStatusChange={handleTopicStatusChange}
+                    onMenu={() => setTopicActionMenu({ id: topic.id, name: topic.name, unitId: unit.id })}
+                    compact
+                  />
                 ))}
                 {topics.length === 0 && addingTopicForUnit !== unit.id && (
                   <p className="text-xs text-text-secondary italic">Sin temas — usá "+ Tema" para agregar</p>
@@ -808,27 +858,37 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
 
       {/* ── Class log modal (create / edit) ──────────────────── */}
       {showClassLog && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm">
-          <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-t-3xl shadow-2xl max-h-[88dvh] overflow-y-auto">
-            <div className="p-5 pb-28">
-              <div className="flex items-center justify-between mb-5">
-                <h3 className="text-base font-semibold text-text-primary">
-                  {editingLogId ? '✎ Editar registro' : '📝 Registro post-clase'}
-                </h3>
-                <button
-                  onClick={() => { setShowClassLog(false); setEditingLogId(null) }}
-                  className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary"
-                >
-                  ✕
-                </button>
-              </div>
+        <div className="fixed inset-0 z-50 flex items-end justify-center px-4 pb-6 bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-3xl shadow-2xl max-h-[90dvh] flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-border-subtle shrink-0">
+              <h3 className="text-base font-semibold text-text-primary">
+                {editingLogId ? 'Editar clase' : 'Post-clase'}
+              </h3>
+              <button
+                onClick={() => { setShowClassLog(false); setEditingLogId(null) }}
+                className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
 
-              {/* ── Topics covered section ─────────────────────────── */}
-              <div className="mb-5">
-                <p className="text-sm font-medium text-text-primary mb-2">Temas vistos en clase</p>
+            <div className="overflow-y-auto px-5 py-4 space-y-3">
+              {/* Topics covered */}
+              <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
+                  <p className="text-xs font-medium text-text-secondary">Temas vistos en clase</p>
+                  {classLogData.topics_covered.length > 0 && (
+                    <span className="text-xs text-primary font-medium">
+                      {classLogData.topics_covered.length} seleccionado{classLogData.topics_covered.length !== 1 ? 's' : ''}
+                    </span>
+                  )}
+                </div>
 
                 {allTopics.length === 0 ? (
-                  <div className="p-3 rounded-2xl bg-surface-2 border border-border-subtle">
+                  <div className="px-4 py-3">
                     <p className="text-xs text-text-secondary mb-2">
                       Aún no hay temas en el temario. Podés agregar uno ahora:
                     </p>
@@ -836,10 +896,8 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
                       quickAddUnitId === null ? (
                         <button
                           onClick={() => setQuickAddUnitId(localUnits[0].id)}
-                          className="text-xs text-primary hover:text-primary/80"
-                        >
-                          + Agregar primer tema
-                        </button>
+                          className="text-xs text-primary"
+                        >+ Agregar primer tema</button>
                       ) : (
                         <div className="flex gap-2">
                           <input
@@ -849,165 +907,361 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
                             onKeyDown={e => { if (e.key === 'Enter') quickAddTopic(quickAddUnitId) }}
                             placeholder="Nombre del tema..."
                             autoFocus
-                            className="flex-1 h-9 px-3 rounded-xl bg-background border border-border-subtle text-sm text-text-primary placeholder-text-secondary focus:outline-none focus:border-primary/60"
+                            className="flex-1 h-9 px-3 rounded-xl bg-surface border border-border-subtle text-sm text-text-primary placeholder-text-secondary focus:outline-none"
                           />
-                          <button
-                            onClick={() => quickAddTopic(quickAddUnitId)}
-                            disabled={!quickTopicName.trim() || quickAdding}
-                            className="px-3 h-9 rounded-xl bg-primary text-white text-xs disabled:opacity-40"
-                          >
+                          <button onClick={() => quickAddTopic(quickAddUnitId)} disabled={!quickTopicName.trim() || quickAdding} className="px-3 h-9 rounded-xl bg-primary text-white text-xs disabled:opacity-40">
                             {quickAdding ? '…' : '✓'}
                           </button>
                         </div>
                       )
                     ) : (
-                      <p className="text-xs text-text-secondary italic">
-                        Primero creá unidades en el temario.
-                      </p>
+                      <p className="text-xs text-text-secondary italic">Primero creá unidades en el temario.</p>
                     )}
                   </div>
                 ) : (
-                  <div className="space-y-4">
-                    {localUnits.map(unit => {
+                  <div>
+                    {localUnits.map((unit, uIdx) => {
                       const topics = unitTopics[unit.id] || []
+                      if (topics.length === 0 && quickAddUnitId !== unit.id) return null
+                      const isUnitCollapsed = classLogCollapsed[unit.id] ?? false
                       return (
-                        <div key={unit.id}>
-                          <div className="flex items-center justify-between mb-2">
-                            <p className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
-                              {unit.name}
-                            </p>
-                            {quickAddUnitId === unit.id ? (
-                              <div className="flex gap-1 items-center">
-                                <input
-                                  type="text"
-                                  value={quickTopicName}
-                                  onChange={e => setQuickTopicName(e.target.value)}
-                                  onKeyDown={e => {
-                                    if (e.key === 'Enter') quickAddTopic(unit.id)
-                                    if (e.key === 'Escape') { setQuickAddUnitId(null); setQuickTopicName('') }
-                                  }}
-                                  placeholder="Nuevo tema..."
-                                  autoFocus
-                                  className="w-32 h-7 px-2 rounded-lg bg-background border border-border-subtle text-xs text-text-primary placeholder-text-secondary focus:outline-none focus:border-primary/60"
-                                />
-                                <button
-                                  onClick={() => quickAddTopic(unit.id)}
-                                  disabled={!quickTopicName.trim() || quickAdding}
-                                  className="h-7 px-2 rounded-lg bg-primary text-white text-xs disabled:opacity-40"
-                                >
-                                  {quickAdding ? '…' : '✓'}
-                                </button>
-                                <button
-                                  onClick={() => { setQuickAddUnitId(null); setQuickTopicName('') }}
-                                  className="h-7 w-7 flex items-center justify-center rounded-lg bg-surface-2 text-text-secondary text-xs"
-                                >
-                                  ✕
-                                </button>
-                              </div>
-                            ) : (
-                              <button
-                                onClick={() => { setQuickAddUnitId(unit.id); setQuickTopicName('') }}
-                                className="text-xs text-primary hover:text-primary/80 transition-colors"
-                              >
-                                + tema nuevo
-                              </button>
-                            )}
-                          </div>
+                        <div key={unit.id} className={uIdx > 0 ? 'border-t border-border-subtle' : ''}>
+                          {/* Unit header */}
+                          <button
+                            onClick={() => setClassLogCollapsed(p => ({ ...p, [unit.id]: !p[unit.id] }))}
+                            className="w-full flex items-center justify-between px-4 py-2.5"
+                          >
+                            <p className="text-xs font-semibold text-text-secondary uppercase tracking-wider">{unit.name}</p>
+                            <div className="flex items-center gap-2">
+                              {topics.filter(t => classLogData.topics_covered.includes(t.id)).length > 0 && (
+                                <span className="text-xs text-primary font-medium">
+                                  {topics.filter(t => classLogData.topics_covered.includes(t.id)).length} ✓
+                                </span>
+                              )}
+                              <svg className={`w-3.5 h-3.5 text-text-secondary transition-transform ${isUnitCollapsed ? '' : 'rotate-180'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                              </svg>
+                            </div>
+                          </button>
 
-                          {topics.length === 0 ? (
-                            <p className="text-xs text-text-secondary italic">Sin temas en esta unidad</p>
-                          ) : (
-                            <div className="flex flex-wrap gap-2">
-                              {topics.map(topic => {
-                                const selected = classLogData.topics_covered.includes(topic.id)
-                                return (
+                          {!isUnitCollapsed && (
+                            <div className="px-4 pb-3">
+                              <div className="flex flex-wrap gap-2 mb-2">
+                                {topics.map(topic => (
                                   <button
                                     key={topic.id}
                                     onClick={() => toggleTopicCovered(topic.id)}
                                     className={`px-3 py-1.5 rounded-xl border text-xs font-medium transition-all min-h-[32px] ${
-                                      selected
+                                      classLogData.topics_covered.includes(topic.id)
                                         ? 'border-primary bg-primary/20 text-text-primary'
-                                        : 'border-border-subtle bg-surface-2 text-text-secondary'
+                                        : 'border-border-subtle bg-surface text-text-secondary'
                                     }`}
                                   >
-                                    {selected ? '✓ ' : ''}{topic.name}
+                                    {classLogData.topics_covered.includes(topic.id) ? '✓ ' : ''}{topic.name}
                                   </button>
-                                )
-                              })}
+                                ))}
+                              </div>
+                              {/* Quick-add topic */}
+                              {quickAddUnitId === unit.id ? (
+                                <div className="flex gap-2 mt-1">
+                                  <input
+                                    type="text"
+                                    value={quickTopicName}
+                                    onChange={e => setQuickTopicName(e.target.value)}
+                                    onKeyDown={e => {
+                                      if (e.key === 'Enter') quickAddTopic(unit.id)
+                                      if (e.key === 'Escape') { setQuickAddUnitId(null); setQuickTopicName('') }
+                                    }}
+                                    placeholder="Nuevo tema..."
+                                    autoFocus
+                                    className="flex-1 h-8 px-3 rounded-lg bg-surface border border-border-subtle text-xs text-text-primary placeholder-text-secondary focus:outline-none"
+                                  />
+                                  <button onClick={() => quickAddTopic(unit.id)} disabled={!quickTopicName.trim() || quickAdding} className="h-8 px-2.5 rounded-lg bg-primary text-white text-xs disabled:opacity-40">{quickAdding ? '…' : '✓'}</button>
+                                  <button onClick={() => { setQuickAddUnitId(null); setQuickTopicName('') }} className="h-8 w-8 flex items-center justify-center rounded-lg bg-surface-2 text-text-secondary text-xs">✕</button>
+                                </div>
+                              ) : (
+                                <button onClick={() => { setQuickAddUnitId(unit.id); setQuickTopicName('') }} className="text-xs text-primary/70 hover:text-primary transition-colors">+ tema nuevo</button>
+                              )}
                             </div>
                           )}
                         </div>
                       )
                     })}
-
-                    {classLogData.topics_covered.length > 0 && (
-                      <p className="text-xs text-primary">
-                        ✓ {classLogData.topics_covered.length} tema{classLogData.topics_covered.length !== 1 ? 's' : ''} seleccionado{classLogData.topics_covered.length !== 1 ? 's' : ''}
-                        {' '}— se marcarán como 🟡 vistos automáticamente
-                      </p>
-                    )}
                   </div>
                 )}
               </div>
 
               {/* Understanding level */}
-              <EmojiSelector
-                label="¿Cómo fue la comprensión en clase?"
-                options={UNDERSTANDING_OPTIONS}
-                value={classLogData.understanding_level}
-                onChange={v => setClassLogData(d => ({ ...d, understanding_level: v }))}
-              />
-
-              {/* Homework */}
-              <div className="mt-4 space-y-2">
-                <p className="text-sm font-medium text-text-secondary">¿Hay tarea o trabajo práctico?</p>
-                <div className="flex gap-3">
-                  {[true, false].map(v => (
+              <div className="rounded-2xl bg-surface-2 border border-border-subtle p-4">
+                <p className="text-xs text-text-secondary mb-2.5">Nivel de comprensión en clase</p>
+                <div className="flex gap-2">
+                  {[
+                    { v: 1, label: 'Muy poco' },
+                    { v: 2, label: 'Poco' },
+                    { v: 3, label: 'Regular' },
+                    { v: 4, label: 'Bien' },
+                    { v: 5, label: 'Muy bien' },
+                  ].map(l => (
                     <button
-                      key={String(v)}
-                      onClick={() => setClassLogData(d => ({ ...d, has_homework: v }))}
-                      className={`flex-1 py-2.5 rounded-2xl border text-sm transition-all min-h-[44px] ${
-                        classLogData.has_homework === v
-                          ? 'border-primary bg-primary/20 text-text-primary'
-                          : 'border-border-subtle bg-surface-2 text-text-secondary'
+                      key={l.v}
+                      onClick={() => setClassLogData(d => ({ ...d, understanding_level: l.v }))}
+                      className={`flex-1 py-2 rounded-xl border text-xs font-semibold transition-all ${
+                        classLogData.understanding_level === l.v
+                          ? 'border-primary bg-primary/20 text-primary'
+                          : 'border-border-subtle bg-surface text-text-secondary'
                       }`}
                     >
-                      {v ? '✅ Sí' : '❌ No'}
+                      {['😕','😐','🙂','😊','🤩'][l.v - 1]}
                     </button>
                   ))}
                 </div>
+                <p className="text-[10px] text-text-secondary text-center mt-1.5">
+                  {['Muy poco','Poco','Regular','Bien','Muy bien'][classLogData.understanding_level - 1]}
+                </p>
+              </div>
 
+              {/* Homework toggle */}
+              <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden">
+                <button
+                  onClick={() => setClassLogData(d => ({ ...d, has_homework: !d.has_homework }))}
+                  className="flex items-center justify-between w-full px-4 py-3"
+                >
+                  <span className="text-sm text-text-primary">Quedó tarea / TP</span>
+                  <div className={`w-11 h-6 rounded-full transition-colors ${classLogData.has_homework ? 'bg-primary' : 'bg-surface'} border border-border-subtle relative`}>
+                    <div className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${classLogData.has_homework ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                  </div>
+                </button>
                 {classLogData.has_homework && (
-                  <div className="space-y-2">
-                    <textarea
-                      value={classLogData.homework_description}
-                      onChange={e => setClassLogData(d => ({ ...d, homework_description: e.target.value }))}
-                      placeholder="Describí la tarea..."
-                      className="w-full h-20 px-4 py-3 rounded-2xl bg-surface-2 border border-border-subtle text-sm text-text-primary placeholder-text-secondary resize-none focus:outline-none focus:border-primary/60"
-                    />
-                    <div>
-                      <p className="text-xs text-text-secondary mb-1.5">
-                        Fecha de entrega <span className="text-primary/70">(crea evento automáticamente)</span>
-                      </p>
+                  <>
+                    <div className="border-t border-border-subtle flex items-start gap-3 px-4 py-3">
+                      <svg className="w-4 h-4 text-text-secondary shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                      <textarea
+                        value={classLogData.homework_description}
+                        onChange={e => setClassLogData(d => ({ ...d, homework_description: e.target.value }))}
+                        placeholder="Describí la tarea..."
+                        rows={2}
+                        className="flex-1 bg-transparent text-sm text-text-primary placeholder-text-secondary resize-none focus:outline-none"
+                      />
+                    </div>
+                    <div className="border-t border-border-subtle flex items-center gap-3 px-4 py-3">
+                      <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <rect x="3" y="4" width="18" height="18" rx="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
+                      </svg>
+                      <span className="text-sm text-text-secondary w-24 shrink-0">Fecha entrega</span>
                       <input
                         type="date"
                         value={classLogData.due_date}
                         onChange={e => setClassLogData(d => ({ ...d, due_date: e.target.value }))}
-                        className={modalInput}
+                        className="flex-1 bg-transparent text-sm text-text-primary text-right focus:outline-none"
                       />
                     </div>
-                  </div>
+                    <div className="px-4 pb-2">
+                      <p className="text-xs text-primary/70">Crea un evento de entrega automáticamente</p>
+                    </div>
+                  </>
                 )}
               </div>
+            </div>
 
-              <div className="flex gap-3 mt-5">
-                <Button variant="secondary" className="flex-1" onClick={() => { setShowClassLog(false); setEditingLogId(null) }}>
-                  Cancelar
-                </Button>
-                <Button variant="primary" className="flex-1" onClick={saveClassLog} loading={logLoading}>
-                  {editingLogId ? 'Guardar cambios' : 'Guardar registro'}
-                </Button>
+            <div className="flex gap-3 px-5 pb-5 shrink-0">
+              <Button variant="secondary" className="flex-1" onClick={() => { setShowClassLog(false); setEditingLogId(null) }}>
+                Cancelar
+              </Button>
+              <Button variant="primary" className="flex-1" onClick={saveClassLog} loading={logLoading}>
+                {editingLogId ? 'Guardar cambios' : 'Guardar clase'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── View class log modal ──────────────────────────────── */}
+      {viewingLog && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center px-4 pb-6 bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-3xl shadow-2xl max-h-[90dvh] flex flex-col">
+            <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-border-subtle shrink-0">
+              <div>
+                <h3 className="text-base font-semibold text-text-primary">Clase del {format(parseISO(viewingLog.date), "d 'de' MMMM", { locale: es })}</h3>
+                <p className="text-xs text-text-secondary mt-0.5">
+                  {['Muy poco','Poco','Regular','Bien','Muy bien'][viewingLog.understanding_level - 1]} comprensión
+                  {' '}{['😕','😐','🙂','😊','🤩'][viewingLog.understanding_level - 1]}
+                </p>
               </div>
+              <button onClick={() => setViewingLog(null)} className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="overflow-y-auto px-5 py-4 space-y-3">
+              {/* Topics */}
+              {viewingLog.topics_covered_json?.length > 0 && (
+                <div className="rounded-2xl bg-surface-2 border border-border-subtle p-4">
+                  <p className="text-xs text-text-secondary mb-2.5">Temas vistos</p>
+                  <div className="flex flex-wrap gap-2">
+                    {(viewingLog.topics_covered_json as string[]).map(id => {
+                      const t = allTopics.find(t => t.id === id)
+                      if (!t) return null
+                      return (
+                        <span key={id} className="px-3 py-1.5 rounded-xl border border-primary/30 bg-primary/10 text-xs text-primary font-medium">
+                          ✓ {t.name}
+                        </span>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+              {/* Homework */}
+              {viewingLog.has_homework && (
+                <div className="rounded-2xl bg-amber-500/10 border border-amber-500/20 p-4">
+                  <p className="text-xs font-medium text-amber-400 mb-1">📄 Tarea pendiente</p>
+                  {viewingLog.homework_description && (
+                    <p className="text-sm text-text-primary">{viewingLog.homework_description}</p>
+                  )}
+                  {viewingLog.due_date && (
+                    <p className="text-xs text-text-secondary mt-1">Entrega: {format(parseISO(viewingLog.due_date), "d 'de' MMMM", { locale: es })}</p>
+                  )}
+                </div>
+              )}
+              {!viewingLog.topics_covered_json?.length && !viewingLog.has_homework && (
+                <p className="text-sm text-text-secondary text-center py-4">Sin temas ni tarea registrados</p>
+              )}
+            </div>
+            <div className="flex gap-3 px-5 pb-5 shrink-0">
+              <button
+                onClick={() => { deleteClassLog(viewingLog.id); setViewingLog(null) }}
+                className="w-10 h-10 flex items-center justify-center rounded-2xl bg-red-500/10 text-red-400 shrink-0"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </button>
+              <Button
+                variant="primary"
+                className="flex-1"
+                onClick={() => { setViewingLog(null); openClassLog(viewingLog) }}
+              >
+                Editar
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Topic action menu ──────────────────────────────────── */}
+      {topicActionMenu && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center px-4 pb-6 bg-black/60 backdrop-blur-sm" onClick={() => setTopicActionMenu(null)}>
+          <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-3xl shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-5 pt-4 pb-3 border-b border-border-subtle">
+              <p className="text-xs text-text-secondary">Tema</p>
+              <p className="text-sm font-semibold text-text-primary truncate">{topicActionMenu.name}</p>
+            </div>
+            <div className="p-2">
+              <button
+                onClick={() => {
+                  setRenamingTopic({ id: topicActionMenu.id, name: topicActionMenu.name, unitId: topicActionMenu.unitId })
+                  setRenameValue(topicActionMenu.name)
+                  setTopicActionMenu(null)
+                }}
+                className="w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl hover:bg-surface-2 transition-colors text-left"
+              >
+                <svg className="w-4 h-4 text-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                </svg>
+                <span className="text-sm text-text-primary">Renombrar</span>
+              </button>
+              {localUnits.length > 1 && (
+                <button
+                  onClick={() => {
+                    setMovingTopic({ id: topicActionMenu.id, name: topicActionMenu.name, fromUnitId: topicActionMenu.unitId })
+                    setTopicActionMenu(null)
+                  }}
+                  className="w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl hover:bg-surface-2 transition-colors text-left"
+                >
+                  <svg className="w-4 h-4 text-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                  </svg>
+                  <span className="text-sm text-text-primary">Mover a otra unidad</span>
+                </button>
+              )}
+              <button
+                onClick={() => deleteTopic(topicActionMenu.id, topicActionMenu.unitId)}
+                className="w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl hover:bg-red-500/10 transition-colors text-left"
+              >
+                <svg className="w-4 h-4 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                <span className="text-sm text-red-400">Eliminar tema</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Rename topic modal ─────────────────────────────────── */}
+      {renamingTopic && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center px-4 pb-6 bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-3xl shadow-2xl">
+            <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-border-subtle">
+              <h3 className="text-base font-semibold text-text-primary">Renombrar tema</h3>
+              <button onClick={() => setRenamingTopic(null)} className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+            <div className="px-5 py-4">
+              <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden mb-3">
+                <div className="flex items-center gap-3 px-4 py-3">
+                  <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                  <input
+                    type="text"
+                    value={renameValue}
+                    onChange={e => setRenameValue(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && saveRenameTopic()}
+                    autoFocus
+                    className="flex-1 bg-transparent text-sm text-text-primary focus:outline-none"
+                  />
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <Button variant="secondary" className="flex-1" onClick={() => setRenamingTopic(null)}>Cancelar</Button>
+                <Button variant="primary" className="flex-1" onClick={saveRenameTopic} loading={topicActionLoading} disabled={!renameValue.trim()}>Guardar</Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Move topic modal ───────────────────────────────────── */}
+      {movingTopic && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center px-4 pb-6 bg-black/60 backdrop-blur-sm" onClick={() => setMovingTopic(null)}>
+          <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-3xl shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-border-subtle">
+              <div>
+                <h3 className="text-base font-semibold text-text-primary">Mover tema</h3>
+                <p className="text-xs text-text-secondary mt-0.5 truncate">{movingTopic.name}</p>
+              </div>
+              <button onClick={() => setMovingTopic(null)} className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+            <div className="p-2">
+              {localUnits.filter(u => u.id !== movingTopic.fromUnitId).map(unit => (
+                <button
+                  key={unit.id}
+                  onClick={() => saveMoveTopic(unit.id)}
+                  disabled={topicActionLoading}
+                  className="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl hover:bg-surface-2 transition-colors text-left disabled:opacity-50"
+                >
+                  <svg className="w-4 h-4 text-primary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                  </svg>
+                  <span className="text-sm text-text-primary">{unit.name}</span>
+                </button>
+              ))}
             </div>
           </div>
         </div>
