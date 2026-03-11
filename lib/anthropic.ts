@@ -96,6 +96,7 @@ ${energyTrend}
 6. Empezá los bloques desde las ${currentTime} (hora actual), el horario llega hasta las 23:00
 7. Incluí al menos 2 bloques de descanso
 8. NO repitas los bloques fijos ya indicados arriba
+9. BLOQUES DE TRABAJO: el bloque de trabajo debe ser UN ÚNICO BLOQUE continuo que cubre el horario completo de trabajo. NO incluyas pausas ni descansos dentro del horario laboral. La ÚNICA excepción es si hay un bloque de VIAJE que cae dentro del horario de trabajo — en ese caso dividí el trabajo en dos bloques (antes y después del viaje).
 
 ## FORMATO DE RESPUESTA
 Respondé ÚNICAMENTE con un JSON array de los bloques ADICIONALES. Cada bloque:
@@ -138,12 +139,16 @@ Generá el JSON array directamente, sin markdown, sin explicaciones adicionales.
 export async function replanDay(
   currentPlan: TimeBlock[],
   change: string,
-  context: { energy_level: number; stress_level: string }
+  context: { energy_level: number; stress_level: string; unexpected_events?: string | null }
 ): Promise<TimeBlock[]> {
   // Argentina timezone: Vercel runs UTC, Argentina = UTC-3
   const now = getCurrentTimeArg()
   const [y, m, d] = getTodayArg().split('-')
   const todayDisplay = `${d}/${m}/${y}`
+
+  const unexpectedContext = context.unexpected_events
+    ? `- Imprevistos del día (registrados al inicio): ${context.unexpected_events}`
+    : ''
 
   const prompt = `Eres un mentor de productividad. El usuario necesita reorganizar su plan del día.
 
@@ -152,19 +157,22 @@ ${JSON.stringify(currentPlan, null, 2)}
 
 ## HORA ACTUAL: ${now}
 
-## CAMBIO REPORTADO
+## ⚠️ CAMBIO REPORTADO AHORA (PRIORIDAD MÁXIMA — adaptá el plan a esto)
 ${change}
 
-## CONTEXTO
-- Energía actual: ${context.energy_level}/5
+## CONTEXTO DEL DÍA
+- Energía: ${context.energy_level}/5
 - Estrés: ${context.stress_level}
+${unexpectedContext}
 
 ## INSTRUCCIONES
 1. Mantené los bloques ya completados (completed: true) sin cambios
 2. Solo reorganizá los bloques pendientes a partir de ${now}
-3. Acomodá el cambio reportado manteniendo las prioridades académicas
-4. Respondé ÚNICAMENTE con el JSON array completo (incluyendo bloques ya completados)
-5. No uses markdown ni explicaciones`
+3. El "CAMBIO REPORTADO" es lo más importante: ajustá el plan para accommodarlo, incluso si implica reducir la intensidad o eliminar bloques
+4. Si el cambio indica cansancio/estrés/imprevistos, reducí la intensidad de los bloques restantes
+5. Respetá los imprevistos del día ya registrados al inicio (si los hay) al generar los bloques
+6. Respondé ÚNICAMENTE con el JSON array completo (incluyendo bloques ya completados)
+7. No uses markdown ni explicaciones`
 
   const message = await anthropic.messages.create({
     model: 'claude-sonnet-4-5',

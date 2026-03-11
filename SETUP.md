@@ -12,13 +12,14 @@ Guía completa para levantar el proyecto desde cero en local y desplegarlo en pr
 4. [Configuración de Supabase](#4-configuración-de-supabase)
 5. [Configuración de Google OAuth (Calendar)](#5-configuración-de-google-oauth-calendar)
 6. [Configuración de Anthropic (Claude API)](#6-configuración-de-anthropic-claude-api)
-7. [Desarrollo local](#7-desarrollo-local)
-8. [Primer usuario y seed de datos](#8-primer-usuario-y-seed-de-datos)
-9. [Tests E2E](#9-tests-e2e)
-10. [Deploy en Vercel](#10-deploy-en-vercel)
-11. [Hard reset de base de datos](#11-hard-reset-de-base-de-datos)
-12. [Comandos de referencia rápida](#12-comandos-de-referencia-rápida)
-13. [Troubleshooting](#13-troubleshooting)
+7. [Configuración de Web Push (Notificaciones)](#7-configuración-de-web-push-notificaciones)
+8. [Desarrollo local](#8-desarrollo-local)
+9. [Primer usuario y seed de datos](#9-primer-usuario-y-seed-de-datos)
+10. [Tests E2E](#10-tests-e2e)
+11. [Deploy en Vercel](#11-deploy-en-vercel)
+12. [Hard reset de base de datos](#12-hard-reset-de-base-de-datos)
+13. [Comandos de referencia rápida](#13-comandos-de-referencia-rápida)
+14. [Troubleshooting](#14-troubleshooting)
 
 ---
 
@@ -53,8 +54,13 @@ ANTHROPIC_API_KEY=sk-ant-api03-XXXXXXXXXXXXXXXXXXXXXXXX
 GOOGLE_CLIENT_ID=XXXXXXXXXX.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=GOCSPX-XXXXXXXXXXXXXXXXXXXXXXXX
 
+# ── Web Push (VAPID) ───────────────────────────────────────
+NEXT_PUBLIC_VAPID_PUBLIC_KEY=Bxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+VAPID_PRIVATE_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+VAPID_MAILTO=mailto:admin@mentoria.app
+
 # ── App URL (cambiar en producción) ───────────────────────
-NEXTAUTH_URL=http://localhost:3000
+NEXTAUTH_URL=https://iamentor.vercel.app
 ```
 
 ### Dónde conseguir cada variable
@@ -67,6 +73,9 @@ NEXTAUTH_URL=http://localhost:3000
 | `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) → API Keys |
 | `GOOGLE_CLIENT_ID` | Google Cloud Console → APIs → Credentials → OAuth 2.0 Client |
 | `GOOGLE_CLIENT_SECRET` | Mismo lugar que el Client ID |
+| `NEXT_PUBLIC_VAPID_PUBLIC_KEY` | Generado con `npx web-push generate-vapid-keys` (ver sección 7) |
+| `VAPID_PRIVATE_KEY` | Idem anterior |
+| `VAPID_MAILTO` | Email de contacto para notificaciones push (ej: `mailto:admin@mentoria.app`) |
 
 > **Importante:** `.env.local` está en `.gitignore`. Nunca commitear este archivo.
 
@@ -118,18 +127,27 @@ ORDER BY table_name;
 --           travel_logs, user_integrations
 ```
 
-### 4.3 Ejecutar la migración v3
+### 4.3 Ejecutar todas las migraciones en orden
 
-1. En SQL Editor → Nueva query
-2. Copiar el contenido de `supabase/migrations_v3.sql`
-3. Ejecutar (crea `profiles`, `user_config`, `class_schedule`, `notifications`)
+Ejecutar cada migración en SQL Editor → Nueva query, en este orden:
+
+| Archivo | Qué agrega |
+|---------|------------|
+| `migrations_v3.sql` | `profiles`, `user_config`, `class_schedule`, `notifications` |
+| `migrations_v4.sql` | `class_logs` con topics_covered_json |
+| `migrations_v5.sql` | `ALTER TABLE class_logs ADD COLUMN due_date DATE` |
+| `migrations_v6.sql` | `push_subscriptions`, columna `is_employed` en user_config, UNIQUE constraint en notifications |
 
 ```sql
--- Verificar tablas adicionales:
+-- Verificar tablas esperadas tras todas las migraciones:
 SELECT table_name FROM information_schema.tables
-WHERE table_schema = 'public' AND table_name IN
-  ('profiles', 'user_config', 'class_schedule', 'notifications');
--- Debe devolver 4 filas
+WHERE table_schema = 'public'
+ORDER BY table_name;
+
+-- Debe incluir: academic_events, checkins, class_logs, class_schedule,
+--               daily_plans, notifications, profiles, push_subscriptions,
+--               semesters, subjects, topics, travel_logs, units,
+--               user_config, user_integrations, workouts
 ```
 
 ### 4.4 Configurar Auth
@@ -198,7 +216,39 @@ Settings → API → copiar:
 
 ---
 
-## 7. Desarrollo local
+## 7. Configuración de Web Push (Notificaciones)
+
+> Opcional para desarrollo. Requerido en producción para recibir notificaciones push en el dispositivo.
+
+### 7.1 Generar claves VAPID
+
+```bash
+npx web-push generate-vapid-keys
+```
+
+Esto imprime dos claves. Copiarlas al `.env.local`:
+
+```bash
+NEXT_PUBLIC_VAPID_PUBLIC_KEY=<clave pública>
+VAPID_PRIVATE_KEY=<clave privada>
+VAPID_MAILTO=mailto:tu@email.com
+```
+
+> **Importante:** Las claves VAPID son permanentes por proyecto. Cambiarlas invalida todas las suscripciones existentes.
+
+### 7.2 Service Worker
+
+El archivo `public/push-sw.js` ya está incluido en el repo. No requiere configuración adicional.
+
+### 7.3 Activar notificaciones
+
+1. Ir a `/settings` en la app
+2. Sección "Notificaciones" → tocar el toggle para suscribirse
+3. El browser solicitará permiso de notificaciones del sistema operativo
+
+---
+
+## 8. Desarrollo local
 
 ### Iniciar el servidor de desarrollo
 
@@ -226,16 +276,16 @@ npm run lint     # ESLint (nota: desactivado en build)
 
 ---
 
-## 8. Primer usuario y seed de datos
+## 9. Primer usuario y seed de datos
 
-### 8.1 Registrar el primer usuario real
+### 9.1 Registrar el primer usuario real
 
 1. Abrir `http://localhost:3000/login`
 2. Hacer click en **"Registrarse"**
 3. Ingresar email y contraseña
 4. La app redirige automáticamente a `/onboarding`
 
-### 8.2 Onboarding (wizard 4 pasos)
+### 9.2 Onboarding (wizard 4 pasos)
 
 | Paso | Qué configura |
 |------|---------------|
@@ -244,7 +294,7 @@ npm run lint     # ESLint (nota: desactivado en build)
 | 3. Cuatrimestre | Nombre, fechas inicio y fin del cuatrimestre |
 | 4. Materias | Agregar materias con nombre y color |
 
-### 8.3 Cargar el seed de datos de ejemplo (opcional)
+### 9.3 Cargar el seed de datos de ejemplo (opcional)
 
 Si querés empezar con 4 materias y 69 temas pre-cargados:
 
@@ -261,7 +311,7 @@ Esto carga:
 - 17 unidades temáticas
 - 69 temas individuales
 
-### 8.4 Cargar clases del cuatrimestre (Settings)
+### 9.4 Cargar clases del cuatrimestre (Settings)
 
 Después del onboarding, ir a `/settings` para agregar:
 - Clases fijas por día de la semana
@@ -269,21 +319,21 @@ Después del onboarding, ir a `/settings` para agregar:
 
 ---
 
-## 9. Tests E2E
+## 10. Tests E2E
 
-### 9.1 Prerequisitos
+### 10.1 Prerequisitos
 
 - El servidor de desarrollo debe estar corriendo en `http://localhost:3000`
 - Las variables de entorno deben incluir `SUPABASE_SERVICE_ROLE_KEY`
 
-### 9.2 Ejecutar la suite
+### 10.2 Ejecutar la suite
 
 ```bash
 # Desde la raíz del proyecto
 node node_modules/ts-node/dist/bin.js --project tests/tsconfig.json tests/e2e-flow.ts
 ```
 
-### 9.3 Qué hace la suite (9 pasos, 23 checks)
+### 10.3 Qué hace la suite (9 pasos, 23 checks)
 
 | Paso | Descripción |
 |------|-------------|
@@ -297,7 +347,7 @@ node node_modules/ts-node/dist/bin.js --project tests/tsconfig.json tests/e2e-fl
 | 8 | Inserta workout de tipo 'empuje' |
 | 9 | Reporte final + limpieza automática si todos los checks pasan |
 
-### 9.4 Checks validados en Paso 6 (plan generation)
+### 10.4 Checks validados en Paso 6 (plan generation)
 
 - Plan devuelve un array de bloques
 - Incluye bloque de TRABAJO (solo en días laborales)
@@ -307,7 +357,7 @@ node node_modules/ts-node/dist/bin.js --project tests/tsconfig.json tests/e2e-fl
 - Estudio prioriza ALGORITMOS (TP en 5 días → urgencia máxima)
 - Si hay 2+ bloques de estudio: también incluye QUÍMICA (parcial en 10 días)
 
-### 9.5 Idempotencia
+### 10.5 Idempotencia
 
 La suite es completamente idempotente. Se puede correr múltiples veces porque:
 - El paso 1 detecta y elimina el usuario de test previo antes de crear uno nuevo
@@ -315,9 +365,9 @@ La suite es completamente idempotente. Se puede correr múltiples veces porque:
 
 ---
 
-## 10. Deploy en Vercel
+## 11. Deploy en Vercel
 
-### 10.1 Prerequisitos
+### 11.1 Prerequisitos
 
 ```bash
 # Instalar Vercel CLI (si no está instalado)
@@ -327,7 +377,7 @@ npm install -g vercel
 vercel --version
 ```
 
-### 10.2 Login y link del proyecto
+### 11.2 Login y link del proyecto
 
 ```bash
 # Login (abre browser para autenticación)
@@ -337,7 +387,7 @@ vercel login
 vercel link --yes --scope <TU-SCOPE> --project iamentor
 ```
 
-### 10.3 Cargar variables de entorno en Vercel
+### 11.3 Cargar variables de entorno en Vercel
 
 ```bash
 # Ejecutar uno por uno (o usar el dashboard de Vercel)
@@ -347,12 +397,15 @@ echo "sb_secret_XXX"              | vercel env add SUPABASE_SERVICE_ROLE_KEY pro
 echo "sk-ant-api03-XXX"           | vercel env add ANTHROPIC_API_KEY production
 echo "XXX.apps.googleusercontent" | vercel env add GOOGLE_CLIENT_ID production
 echo "GOCSPX-XXX"                 | vercel env add GOOGLE_CLIENT_SECRET production
+echo "BxxxxxxXXXXXX..."           | vercel env add NEXT_PUBLIC_VAPID_PUBLIC_KEY production
+echo "xxxxxxXXXXXX..."            | vercel env add VAPID_PRIVATE_KEY production
+echo "mailto:admin@mentoria.app"  | vercel env add VAPID_MAILTO production
 echo "https://iamentor.vercel.app"| vercel env add NEXTAUTH_URL production
 ```
 
 Alternativamente, desde el **Vercel Dashboard** → Settings → Environment Variables.
 
-### 10.4 Deploy a producción
+### 11.4 Deploy a producción
 
 ```bash
 vercel --prod --yes
@@ -360,14 +413,14 @@ vercel --prod --yes
 
 El build tarda ~2-3 minutos. Al finalizar imprime la URL de producción.
 
-### 10.5 Re-deploy (actualizaciones)
+### 11.5 Re-deploy (actualizaciones)
 
 ```bash
 # Después de cualquier cambio de código
 vercel --prod --yes
 ```
 
-### 10.6 Post-deploy: actualizar URLs en servicios externos
+### 11.6 Post-deploy: actualizar URLs en servicios externos
 
 Después del primer deploy, actualizar:
 
@@ -384,7 +437,7 @@ https://iamentor.vercel.app/api/calendar/callback
 
 ---
 
-## 11. Hard reset de base de datos
+## 12. Hard reset de base de datos
 
 Para limpiar todos los datos manteniendo la estructura (útil antes de un lanzamiento oficial):
 
@@ -401,7 +454,7 @@ Esto borra:
 
 ---
 
-## 12. Comandos de referencia rápida
+## 13. Comandos de referencia rápida
 
 ```bash
 # ── Desarrollo ──────────────────────────────────────────────
@@ -434,7 +487,7 @@ SELECT count(*) FROM topics;                       # Contar temas cargados
 
 ---
 
-## 13. Troubleshooting
+## 14. Troubleshooting
 
 ### Error: `SUPABASE_URL is required`
 Las variables de entorno no están cargadas. Verificar que `.env.local` existe en la raíz del proyecto y tiene los valores correctos.
@@ -501,6 +554,16 @@ typescript: { ignoreBuildErrors: true },
 
 ---
 
+### Las notificaciones push no llegan
+
+1. Verificar que `NEXT_PUBLIC_VAPID_PUBLIC_KEY` y `VAPID_PRIVATE_KEY` están configuradas tanto en `.env.local` como en Vercel
+2. Verificar que el dispositivo tiene permiso de notificaciones concedido (Ajustes del sistema → Notificaciones)
+3. En iOS, las push solo funcionan desde Safari y con la app instalada como PWA en pantalla de inicio
+4. Verificar que la tabla `push_subscriptions` existe en Supabase (requiere `migrations_v6.sql`)
+5. Si cambiaste las claves VAPID, todos los usuarios deben volver a suscribirse desde `/settings`
+
+---
+
 ### La app no se instala como PWA en iOS
 En iOS la instalación PWA solo funciona desde **Safari** (no Chrome ni Firefox).
 1. Abrir la URL en Safari
@@ -519,7 +582,17 @@ En iOS la instalación PWA solo funciona desde **Safari** (no Chrome ni Firefox)
 | `tailwind.config.ts` | Design tokens (colores, fuentes) |
 | `middleware.ts` | Auth guard — protege todas las rutas `/app/*` |
 | `supabase/schema.sql` | Schema completo de la base de datos |
-| `supabase/migrations_v3.sql` | Tablas adicionales (profiles, user_config, etc.) |
+| `supabase/migrations_v3.sql` | `profiles`, `user_config`, `class_schedule`, `notifications` |
+| `supabase/migrations_v4.sql` | `class_logs` con topics_covered_json |
+| `supabase/migrations_v5.sql` | `class_logs.due_date` — fecha de entrega de tareas |
+| `supabase/migrations_v6.sql` | `push_subscriptions`, `user_config.is_employed`, dedup notifications |
+| `public/push-sw.js` | Service worker para notificaciones push |
+| `lib/push.ts` | Helpers para enviar notificaciones push via `web-push` |
+| `hooks/usePushNotifications.ts` | Hook client-side para gestionar suscripción push |
+| `app/api/push/subscribe/route.ts` | API: guardar/eliminar suscripción push del dispositivo |
+| `app/api/ai/parse-syllabus/route.ts` | API: importar temario desde imagen/PDF con IA |
+| `app/api/ai/parse-events/route.ts` | API: importar fechas académicas desde imagen/PDF con IA |
 | `tests/tsconfig.json` | Config TypeScript específica para los tests |
 | `public/manifest.json` | PWA manifest (name, icons, display mode) |
+| `.claudeignore` | Archivos excluidos de la lectura de Claude Code |
 | `.vercel/project.json` | Link del proyecto a Vercel (no commitear si es privado) |

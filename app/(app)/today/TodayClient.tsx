@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { format, parseISO, differenceInDays } from 'date-fns'
@@ -11,10 +11,29 @@ import { TimeBlock } from '@/components/ui/TimeBlock'
 import { Badge } from '@/components/ui/Badge'
 import { ProgressBar } from '@/components/ui/ProgressBar'
 import Button from '@/components/ui/Button'
-import NotificationBanner from '@/components/features/NotificationBanner'
 import { getGreeting, stressLabel } from '@/lib/utils'
 import { getDaysColor as getColor } from '@/lib/study-priority'
-import type { CheckIn, DailyPlan, TimeBlock as TimeBlockType, AppNotification } from '@/types'
+import type { CheckIn, DailyPlan, TimeBlock as TimeBlockType } from '@/types'
+
+// ── dnd-kit imports ───────────────────────────────────────────────────────────
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  TouchSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+  arrayMove,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 
 // ── Subject/unit/topic hierarchy for the edit modal ──────────────────────────
 interface TopicOption { id: string; name: string; status: string }
@@ -29,12 +48,113 @@ interface Props {
   energyHistory: { date: string; energy_level: number }[]
   today: string
   previewBlocks?: TimeBlockType[]
-  /** Passed from page.tsx searchParams: 'replan' triggers auto-replan on mount */
   actionParam?: string
-  /** Subjects with units+topics for block editing */
   subjectsData?: SubjectOption[]
 }
 
+// ── Sortable block wrapper ────────────────────────────────────────────────────
+function SortableBlockRow({
+  block,
+  menuOpen,
+  onMenuToggle,
+  onToggle,
+  onMoveUp,
+  onMoveDown,
+  onEdit,
+  onDelete,
+  isFirst,
+  isLast,
+}: {
+  block: TimeBlockType
+  menuOpen: boolean
+  onMenuToggle: () => void
+  onToggle: (id: string, completed: boolean) => void
+  onMoveUp: () => void
+  onMoveDown: () => void
+  onEdit: () => void
+  onDelete: () => void
+  isFirst: boolean
+  isLast: boolean
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: block.id })
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.4 : 1,
+    position: 'relative' as const,
+    zIndex: isDragging ? 50 : 'auto',
+  }
+
+  return (
+    <div ref={setNodeRef} style={style} className="relative">
+      <div className="flex items-stretch gap-1">
+        {/* ≡ drag handle */}
+        <button
+          {...attributes}
+          {...listeners}
+          className="w-7 shrink-0 flex items-center justify-center rounded-xl text-text-secondary hover:text-text-primary hover:bg-surface-2 transition-colors text-base cursor-grab active:cursor-grabbing touch-none"
+          aria-label="Mover bloque"
+        >
+          ≡
+        </button>
+        {/* ⋮ options menu */}
+        <button
+          onClick={onMenuToggle}
+          className="w-7 shrink-0 flex items-center justify-center rounded-xl text-text-secondary hover:text-text-primary hover:bg-surface-2 transition-colors text-base"
+          aria-label="Opciones"
+        >
+          ⋮
+        </button>
+        {/* TimeBlock */}
+        <div className="flex-1 min-w-0">
+          <TimeBlock block={block} onToggle={onToggle} />
+        </div>
+      </div>
+
+      {/* Action row */}
+      {menuOpen && (
+        <div className="flex gap-2 mt-1 ml-[56px] animate-in slide-in-from-top-1 duration-150">
+          <button
+            onClick={onMoveUp}
+            disabled={isFirst}
+            className="flex-1 py-1.5 rounded-xl bg-surface-2 border border-border-subtle text-xs text-text-secondary hover:text-text-primary transition-colors min-h-[36px] disabled:opacity-30"
+          >
+            ↑ Subir
+          </button>
+          <button
+            onClick={onMoveDown}
+            disabled={isLast}
+            className="flex-1 py-1.5 rounded-xl bg-surface-2 border border-border-subtle text-xs text-text-secondary hover:text-text-primary transition-colors min-h-[36px] disabled:opacity-30"
+          >
+            ↓ Bajar
+          </button>
+          <button
+            onClick={onEdit}
+            className="flex-1 py-1.5 rounded-xl bg-surface-2 border border-border-subtle text-xs text-text-secondary hover:text-text-primary transition-colors min-h-[36px]"
+          >
+            ✎ Editar
+          </button>
+          <button
+            onClick={onDelete}
+            className="flex-1 py-1.5 rounded-xl bg-red-500/10 border border-red-500/20 text-xs text-red-400 hover:text-red-300 transition-colors min-h-[36px]"
+          >
+            🗑 Borrar
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
 export default function TodayClient({
   user,
   checkin,
@@ -52,71 +172,35 @@ export default function TodayClient({
   const [blocks, setBlocks] = useState<TimeBlockType[]>(plan?.plan_json || [])
   const [generating, setGenerating] = useState(false)
   const [completion, setCompletion] = useState(plan?.completion_percentage || 0)
-  const [notifications, setNotifications] = useState<AppNotification[]>([])
 
   // ── Block editing state ───────────────────────────────────────────────────
-  const [blockMenuId, setBlockMenuId]   = useState<string | null>(null)
-  const [editingBlock, setEditingBlock] = useState<TimeBlockType | null>(null)
-  const [editSubjectId, setEditSubjectId] = useState('')
-  const [editTopicId, setEditTopicId]   = useState('')
-  const [editTitle, setEditTitle]       = useState('')
-  const [editDesc, setEditDesc]         = useState('')
-  const [savingEdit, setSavingEdit]     = useState(false)
+  const [blockMenuId, setBlockMenuId]       = useState<string | null>(null)
+  const [editingBlock, setEditingBlock]     = useState<TimeBlockType | null>(null)
+  const [editSubjectId, setEditSubjectId]   = useState('')
+  const [editTopicId, setEditTopicId]       = useState('')
+  const [editTitle, setEditTitle]           = useState('')
+  const [editDesc, setEditDesc]             = useState('')
+  const [editStartTime, setEditStartTime]   = useState('')
+  const [editEndTime, setEditEndTime]       = useState('')
+  const [savingEdit, setSavingEdit]         = useState(false)
 
   const greeting  = getGreeting()
   const dateLabel = format(parseISO(today), "EEEE d 'de' MMMM", { locale: es })
 
-  // ── Fetch & process notifications once on mount ───────────────────────────
-  useEffect(() => {
-    async function fetchNotifications() {
-      try {
-        const res = await fetch('/api/notifications')
-        if (!res.ok) return
-        const data = await res.json()
-        setNotifications(data.notifications ?? [])
-      } catch {
-        // non-blocking — no notifications is fine
-      }
-    }
-    fetchNotifications()
-  }, [])
+  // ── dnd-kit sensors (pointer + touch + keyboard) ──────────────────────────
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  )
 
-  // ── Auto-replan when landing on /today?action=replan ──────────────────────
+  // ── Auto-replan ───────────────────────────────────────────────────────────
   useEffect(() => {
     if (actionParam === 'replan' && blocks.length > 0) {
       handleReplan()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [actionParam])
-
-  // ── Mark notification as read → returns target_path from server ───────────
-  const markRead = useCallback(async (id: string): Promise<string | null> => {
-    setNotifications(prev => prev.filter(n => n.id !== id))
-    try {
-      const res = await fetch(`/api/notifications/${id}`, { method: 'PATCH' })
-      if (!res.ok) return null
-      const data = await res.json()
-      return data.target_path ?? null
-    } catch {
-      return null
-    }
-  }, [])
-
-  const handleNotificationAction = useCallback(async (id: string, targetPath: string | null) => {
-    const serverPath = await markRead(id)
-    const destination = serverPath ?? targetPath
-    if (!destination) return
-    if (destination === '/today?action=replan') {
-      await handleReplan()
-      return
-    }
-    router.push(destination)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [markRead, router])
-
-  const handleNotificationDismiss = useCallback(async (id: string) => {
-    await markRead(id)
-  }, [markRead])
 
   // ── Persist blocks to DB ──────────────────────────────────────────────────
   async function persistBlocks(updated: TimeBlockType[]) {
@@ -145,16 +229,14 @@ export default function TodayClient({
     }
   }
 
-  // ── Replan (triggered by energy_boost notification) ───────────────────────
+  // ── Replan ────────────────────────────────────────────────────────────────
   async function handleReplan() {
     setGenerating(true)
     try {
       const res = await fetch('/api/ai/replan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          change: 'Tengo más energía de lo esperado y quiero una sesión más productiva',
-        }),
+        body: JSON.stringify({ change: 'Tengo más energía de lo esperado y quiero una sesión más productiva' }),
       })
       if (!res.ok) throw new Error('Error al replanificar')
       const data = await res.json()
@@ -173,26 +255,69 @@ export default function TodayClient({
     await persistBlocks(updated)
   }
 
-  // ── Delete block ──────────────────────────────────────────────────────────
+  // ── Delete block — next block inherits deleted block's start_time ─────────
   async function deleteBlock(id: string) {
-    const updated = blocks.filter(b => b.id !== id)
+    const idx = blocks.findIndex(b => b.id === id)
+    if (idx < 0) return
+    const deletedStartTime = blocks[idx].start_time
+
+    let updated = blocks.filter(b => b.id !== id)
+    // The block that was immediately after the deleted one takes the freed start_time
+    if (idx < updated.length) {
+      updated = updated.map((b, i) =>
+        i === idx ? { ...b, start_time: deletedStartTime } : b
+      )
+    }
     setBlocks(updated)
     setBlockMenuId(null)
     await persistBlocks(updated)
   }
 
-  // ── Move block up/down ────────────────────────────────────────────────────
+  // ── Move block up/down — swap content, keep timeslots in position ─────────
   async function moveBlock(id: string, direction: 'up' | 'down') {
     const idx = blocks.findIndex(b => b.id === id)
     if (idx < 0) return
     if (direction === 'up'   && idx === 0) return
     if (direction === 'down' && idx === blocks.length - 1) return
 
-    const updated = [...blocks]
     const swapIdx = direction === 'up' ? idx - 1 : idx + 1
+    const updated = [...blocks]
+
+    // Save the timeslots at both positions
+    const timeA = { start_time: updated[idx].start_time, end_time: updated[idx].end_time }
+    const timeB = { start_time: updated[swapIdx].start_time, end_time: updated[swapIdx].end_time }
+
+    // Swap the blocks in the array
     ;[updated[idx], updated[swapIdx]] = [updated[swapIdx], updated[idx]]
+
+    // Re-apply the original timeslots to each position
+    updated[idx]     = { ...updated[idx],     start_time: timeA.start_time, end_time: timeA.end_time }
+    updated[swapIdx] = { ...updated[swapIdx], start_time: timeB.start_time, end_time: timeB.end_time }
+
     setBlocks(updated)
     setBlockMenuId(null)
+    await persistBlocks(updated)
+  }
+
+  // ── Drag end — swap content, keep timeslots in position ──────────────────
+  async function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+
+    const oldIndex = blocks.findIndex(b => b.id === String(active.id))
+    const newIndex  = blocks.findIndex(b => b.id === String(over.id))
+    if (oldIndex < 0 || newIndex < 0) return
+
+    // Preserve each position's timeslot
+    const timeslots = blocks.map(b => ({ start_time: b.start_time, end_time: b.end_time }))
+    const reordered = arrayMove([...blocks], oldIndex, newIndex)
+    const updated   = reordered.map((block, i) => ({
+      ...block,
+      start_time: timeslots[i].start_time,
+      end_time:   timeslots[i].end_time,
+    }))
+
+    setBlocks(updated)
     await persistBlocks(updated)
   }
 
@@ -203,31 +328,63 @@ export default function TodayClient({
     setEditDesc(block.description)
     setEditSubjectId(block.subject_id || '')
     setEditTopicId(block.topic_id || '')
+    setEditStartTime(block.start_time)
+    setEditEndTime(block.end_time)
     setBlockMenuId(null)
   }
 
-  // ── Save edited block ─────────────────────────────────────────────────────
+  // ── Save edited block — with time conflict resolution ─────────────────────
   async function saveEditedBlock() {
     if (!editingBlock) return
     setSavingEdit(true)
     try {
       const topicChanged = editTopicId !== (editingBlock.topic_id || '')
+      const editedIdx = blocks.findIndex(b => b.id === editingBlock.id)
 
-      const updated = blocks.map(b =>
+      let updated = blocks.map(b =>
         b.id === editingBlock.id
-          ? { ...b, title: editTitle, description: editDesc, subject_id: editSubjectId || undefined, topic_id: editTopicId || undefined }
+          ? {
+              ...b,
+              title:       editTitle,
+              description: editDesc,
+              subject_id:  editSubjectId || undefined,
+              topic_id:    editTopicId   || undefined,
+              start_time:  editStartTime,
+              end_time:    editEndTime,
+            }
           : b
       )
+
+      // ── Conflict resolution with the next block ──────────────────────────
+      // Compare times as "HH:MM" strings (lexicographic comparison works for time)
+      if (editedIdx >= 0 && editedIdx < updated.length - 1) {
+        const next = updated[editedIdx + 1]
+        if (editEndTime > next.start_time) {
+          if (editEndTime >= next.end_time) {
+            // Edited block completely swallows next block → delete next
+            updated = updated.filter((_, i) => i !== editedIdx + 1)
+          } else {
+            // Partial overlap → push next block's start_time forward
+            updated = updated.map((b, i) =>
+              i === editedIdx + 1 ? { ...b, start_time: editEndTime } : b
+            )
+          }
+        }
+      }
+
+      // Re-sort by start_time so order stays consistent
+      updated.sort((a, b) => a.start_time.localeCompare(b.start_time))
+
       setBlocks(updated)
       await persistBlocks(updated)
 
-      // Sync topic status in DB when the topic assignment changes on a study block
+      // Sync topic status when study block's topic changes
       if (topicChanged && editTopicId && editingBlock.type === 'study') {
         await supabase
           .from('topics')
           .update({ last_studied: new Date().toISOString(), status: 'yellow' })
           .eq('id', editTopicId)
-          .eq('status', 'red') // only promote from red → yellow, don't demote green
+          .eq('status', 'red')
       }
 
       setEditingBlock(null)
@@ -238,9 +395,6 @@ export default function TodayClient({
 
   // ── Derived subjects/units/topics for dropdowns ───────────────────────────
   const selectedSubjectUnits = subjectsData.find(s => s.id === editSubjectId)?.units ?? []
-  const selectedUnitTopics   = selectedSubjectUnits.find(u => u.topics.some(t => t.id === editTopicId))?.topics
-    ?? selectedSubjectUnits[0]?.topics
-    ?? []
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -253,13 +407,6 @@ export default function TodayClient({
           {greeting} 👋
         </h1>
       </div>
-
-      {/* ── Notification banners ───────────────────────────────────────────── */}
-      <NotificationBanner
-        notifications={notifications}
-        onAction={handleNotificationAction}
-        onDismiss={handleNotificationDismiss}
-      />
 
       {/* Check-in status / CTA */}
       {!checkin ? (
@@ -282,15 +429,11 @@ export default function TodayClient({
           </CardHeader>
           <div className="grid grid-cols-3 gap-3">
             <div className="text-center">
-              <p className="text-2xl">
-                {['🪫','😮‍💨','⚡','🔥','🚀'][checkin.energy_level - 1]}
-              </p>
+              <p className="text-2xl">{['🪫','😮‍💨','⚡','🔥','🚀'][checkin.energy_level - 1]}</p>
               <p className="text-xs text-text-secondary mt-1">Energía {checkin.energy_level}/5</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl">
-                {['😴','😕','😐','🙂','😁'][checkin.sleep_quality - 1]}
-              </p>
+              <p className="text-2xl">{['😴','😕','😐','🙂','😁'][checkin.sleep_quality - 1]}</p>
               <p className="text-xs text-text-secondary mt-1">Sueño {checkin.sleep_quality}/5</p>
             </div>
             <div className="text-center">
@@ -316,7 +459,7 @@ export default function TodayClient({
         </Card>
       )}
 
-      {/* Preview blocks (when no check-in but fixed schedule exists) */}
+      {/* Preview blocks (no check-in) */}
       {!checkin && previewBlocks.length > 0 && (
         <div>
           <div className="flex items-center gap-2 mb-2">
@@ -336,7 +479,7 @@ export default function TodayClient({
         </div>
       )}
 
-      {/* Daily plan (only when check-in is done) */}
+      {/* Daily plan */}
       {checkin && (
         <div>
           <div className="flex items-center justify-between mb-3">
@@ -353,88 +496,57 @@ export default function TodayClient({
           {blocks.length === 0 ? (
             <div className="text-center py-10">
               <p className="text-4xl mb-3">🤖</p>
-              <p className="text-text-secondary text-sm mb-4">
-                La IA puede generar tu plan personalizado
-              </p>
-              <Button
-                variant="primary"
-                onClick={generatePlan}
-                loading={generating}
-                disabled={generating}
-              >
+              <p className="text-text-secondary text-sm mb-4">La IA puede generar tu plan personalizado</p>
+              <Button variant="primary" onClick={generatePlan} loading={generating} disabled={generating}>
                 Generar plan con IA ✨
               </Button>
             </div>
           ) : (
-            <div className="space-y-2">
-              {blocks.map(block => (
-                <div key={block.id} className="relative">
-                  {/* Block row with ⋮ menu button */}
-                  <div className="flex items-stretch gap-1">
-                    {/* ⋮ button */}
-                    <button
-                      onClick={() => setBlockMenuId(prev => prev === block.id ? null : block.id)}
-                      className="w-7 shrink-0 flex items-center justify-center rounded-xl text-text-secondary hover:text-text-primary hover:bg-surface-2 transition-colors text-base"
-                      aria-label="Opciones del bloque"
-                    >
-                      ⋮
-                    </button>
-                    {/* TimeBlock takes remaining space */}
-                    <div className="flex-1 min-w-0">
-                      <TimeBlock
-                        block={block}
-                        onToggle={toggleBlock}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Action row — appears below when ⋮ is tapped */}
-                  {blockMenuId === block.id && (
-                    <div className="flex gap-2 mt-1 ml-8 animate-in slide-in-from-top-1 duration-150">
-                      <button
-                        onClick={() => moveBlock(block.id, 'up')}
-                        className="flex-1 py-1.5 rounded-xl bg-surface-2 border border-border-subtle text-xs text-text-secondary hover:text-text-primary transition-colors min-h-[36px]"
-                      >
-                        ↑ Subir
-                      </button>
-                      <button
-                        onClick={() => moveBlock(block.id, 'down')}
-                        className="flex-1 py-1.5 rounded-xl bg-surface-2 border border-border-subtle text-xs text-text-secondary hover:text-text-primary transition-colors min-h-[36px]"
-                      >
-                        ↓ Bajar
-                      </button>
-                      <button
-                        onClick={() => openEdit(block)}
-                        className="flex-1 py-1.5 rounded-xl bg-surface-2 border border-border-subtle text-xs text-text-secondary hover:text-text-primary transition-colors min-h-[36px]"
-                      >
-                        ✎ Editar
-                      </button>
-                      <button
-                        onClick={() => deleteBlock(block.id)}
-                        className="flex-1 py-1.5 rounded-xl bg-red-500/10 border border-red-500/20 text-xs text-red-400 hover:text-red-300 transition-colors min-h-[36px]"
-                      >
-                        🗑 Borrar
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))}
-
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full mt-2 text-text-secondary"
-                onClick={generatePlan}
-                loading={generating}
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext
+                items={blocks.map(b => b.id)}
+                strategy={verticalListSortingStrategy}
               >
-                🔄 Regenerar plan
-              </Button>
-            </div>
+                <div className="space-y-2">
+                  {blocks.map((block, idx) => (
+                    <SortableBlockRow
+                      key={block.id}
+                      block={block}
+                      menuOpen={blockMenuId === block.id}
+                      onMenuToggle={() => setBlockMenuId(prev => prev === block.id ? null : block.id)}
+                      onToggle={toggleBlock}
+                      onMoveUp={() => moveBlock(block.id, 'up')}
+                      onMoveDown={() => moveBlock(block.id, 'down')}
+                      onEdit={() => openEdit(block)}
+                      onDelete={() => deleteBlock(block.id)}
+                      isFirst={idx === 0}
+                      isLast={idx === blocks.length - 1}
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
+          )}
+
+          {blocks.length > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full mt-2 text-text-secondary"
+              onClick={generatePlan}
+              loading={generating}
+            >
+              🔄 Regenerar plan
+            </Button>
           )}
         </div>
       )}
 
-      {/* Upcoming academic events */}
+      {/* Upcoming academic events (active semester only) */}
       {upcomingEvents.length > 0 && (
         <div>
           <h2 className="text-base font-semibold text-text-primary mb-3">Próximas fechas 📅</h2>
@@ -462,10 +574,10 @@ export default function TodayClient({
         </div>
       )}
 
-      {/* ── Edit block modal (bottom-sheet) ──────────────────────────────────── */}
+      {/* ── Edit block modal ──────────────────────────────────────────────────── */}
       {editingBlock && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center px-4 pt-4 pb-24 bg-black/60 backdrop-blur-sm">
-          <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-3xl p-5 shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-end justify-center px-4 pt-4 pb-6 bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-3xl p-5 shadow-2xl max-h-[90dvh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-semibold text-text-primary">✎ Editar bloque</h3>
               <button
@@ -477,6 +589,31 @@ export default function TodayClient({
             </div>
 
             <div className="space-y-3">
+              {/* Time range */}
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <p className="text-xs text-text-secondary mb-1.5">Inicio</p>
+                  <input
+                    type="time"
+                    value={editStartTime}
+                    onChange={e => setEditStartTime(e.target.value)}
+                    className="w-full h-10 px-3 rounded-xl bg-surface-2 border border-border-subtle text-sm text-text-primary focus:outline-none focus:border-primary/60"
+                  />
+                </div>
+                <div className="flex-1">
+                  <p className="text-xs text-text-secondary mb-1.5">
+                    Fin{' '}
+                    <span className="text-primary/60 text-[10px]">(conflictos se ajustan auto)</span>
+                  </p>
+                  <input
+                    type="time"
+                    value={editEndTime}
+                    onChange={e => setEditEndTime(e.target.value)}
+                    className="w-full h-10 px-3 rounded-xl bg-surface-2 border border-border-subtle text-sm text-text-primary focus:outline-none focus:border-primary/60"
+                  />
+                </div>
+              </div>
+
               {/* Title */}
               <div>
                 <p className="text-xs text-text-secondary mb-1.5">Título</p>
@@ -499,7 +636,7 @@ export default function TodayClient({
                 />
               </div>
 
-              {/* Subject selector (only for study blocks) */}
+              {/* Subject + Topic (study blocks only) */}
               {editingBlock.type === 'study' && subjectsData.length > 0 && (
                 <>
                   <div>
@@ -519,8 +656,7 @@ export default function TodayClient({
                   {editSubjectId && selectedSubjectUnits.length > 0 && (
                     <div>
                       <p className="text-xs text-text-secondary mb-1.5">
-                        Tema{' '}
-                        <span className="text-primary/70">(actualiza progreso automáticamente)</span>
+                        Tema <span className="text-primary/70">(actualiza progreso automáticamente)</span>
                       </p>
                       <select
                         value={editTopicId}
@@ -553,7 +689,7 @@ export default function TodayClient({
                 className="flex-1"
                 onClick={saveEditedBlock}
                 loading={savingEdit}
-                disabled={!editTitle.trim()}
+                disabled={!editTitle.trim() || !editStartTime || !editEndTime}
               >
                 Guardar cambios
               </Button>

@@ -19,6 +19,7 @@ export default function CheckInPage() {
   const [loading, setLoading] = useState(false)
   const [loadingMsg, setLoadingMsg] = useState('')
   const [alreadyDone, setAlreadyDone] = useState(false)
+  const [checking, setChecking] = useState(true)
 
   const [form, setForm] = useState<CheckInFormData>({
     sleep_quality: 3,
@@ -35,45 +36,55 @@ export default function CheckInPage() {
   // Check if already done today + pre-fill work_mode from user_config
   useEffect(() => {
     async function check() {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) { setChecking(false); return }
 
-      const today = format(new Date(), 'yyyy-MM-dd')
-      const { data: existing } = await supabase
-        .from('checkins')
-        .select('id')
-        .eq('user_id', user.id)
-        .eq('date', today)
-        .single()
-      if (existing) {
-        setAlreadyDone(true)
-        return
-      }
-
-      // Pre-fill work_mode from user_config
-      const { data: config } = await supabase
-        .from('user_config')
-        .select('work_days_json, work_default_mode, presential_days_json')
-        .eq('user_id', user.id)
-        .single()
-
-      if (config) {
-        const todayDow = new Date().getDay()
-        const workDays: number[] = config.work_days_json || [1, 2, 3, 4, 5]
-        if (workDays.includes(todayDow)) {
-          let defaultMode: WorkMode = 'remoto'
-          if (config.work_default_mode === 'presencial') {
-            defaultMode = 'presencial'
-          } else if (config.work_default_mode === 'remoto') {
-            defaultMode = 'remoto'
-          } else if (config.work_default_mode === 'mixto') {
-            const presentialDays: number[] = config.presential_days_json || []
-            defaultMode = presentialDays.includes(todayDow) ? 'presencial' : 'remoto'
-          }
-          setForm(f => ({ ...f, work_mode: defaultMode }))
-        } else {
-          setForm(f => ({ ...f, work_mode: 'no_work' }))
+        const today = format(new Date(), 'yyyy-MM-dd')
+        const { data: existing } = await supabase
+          .from('checkins')
+          .select('id')
+          .eq('user_id', user.id)
+          .eq('date', today)
+          .single()
+        if (existing) {
+          setAlreadyDone(true)
+          setChecking(false)
+          return
         }
+
+        // Pre-fill work_mode from user_config
+        const { data: config } = await supabase
+          .from('user_config')
+          .select('work_days_json, work_default_mode, presential_days_json, is_employed')
+          .eq('user_id', user.id)
+          .single()
+
+        if (config) {
+          // If user marked themselves as not employed, default to no_work
+          if (config.is_employed === false) {
+            setForm(f => ({ ...f, work_mode: 'no_work' }))
+          } else {
+            const todayDow = new Date().getDay()
+            const workDays: number[] = config.work_days_json || [1, 2, 3, 4, 5]
+            if (workDays.includes(todayDow)) {
+              let defaultMode: WorkMode = 'remoto'
+              if (config.work_default_mode === 'presencial') {
+                defaultMode = 'presencial'
+              } else if (config.work_default_mode === 'remoto') {
+                defaultMode = 'remoto'
+              } else if (config.work_default_mode === 'mixto') {
+                const presentialDays: number[] = config.presential_days_json || []
+                defaultMode = presentialDays.includes(todayDow) ? 'presencial' : 'remoto'
+              }
+              setForm(f => ({ ...f, work_mode: defaultMode }))
+            } else {
+              setForm(f => ({ ...f, work_mode: 'no_work' }))
+            }
+          }
+        }
+      } finally {
+        setChecking(false)
       }
     }
     check()
@@ -156,6 +167,14 @@ export default function CheckInPage() {
       return form.travel_route.every(s => s.origin && s.destination)
     }
     return true
+  }
+
+  if (checking) {
+    return (
+      <div className="min-h-dvh flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+      </div>
+    )
   }
 
   if (alreadyDone) {

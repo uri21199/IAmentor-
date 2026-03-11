@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import { Card, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import Button from '@/components/ui/Button'
+import { usePushNotifications } from '@/hooks/usePushNotifications'
 import type { Semester } from '@/types'
 
 const DAYS = [
@@ -29,6 +30,7 @@ export default function SettingsPage() {
 
   // ── Work config ──────────────────────────────────────────
   const [workConfig, setWorkConfig] = useState({
+    is_employed: true,
     work_days_json: [1, 2, 3, 4, 5] as number[],
     work_start: '09:00',
     work_end: '18:00',
@@ -57,9 +59,13 @@ export default function SettingsPage() {
   const [showNewSemester, setShowNewSemester] = useState(false)
   const [newSemester, setNewSemester] = useState({ name: '', start_date: '', end_date: '' })
   const [creating, setCreating] = useState(false)
+  const [showAllSemesters, setShowAllSemesters] = useState(false)
 
   // ── Google Calendar ──────────────────────────────────────
   const [calendarConnected, setCalendarConnected] = useState(false)
+
+  // ── Push notifications ────────────────────────────────────
+  const { supported: pushSupported, permission: pushPermission, subscribed: pushSubscribed, loading: pushLoading, subscribe: subscribePush, unsubscribe: unsubscribePush } = usePushNotifications()
 
   useEffect(() => {
     async function load() {
@@ -75,6 +81,7 @@ export default function SettingsPage() {
         .single()
       if (config) {
         setWorkConfig({
+          is_employed: config.is_employed !== false, // default true if column missing
           work_days_json: config.work_days_json || [1, 2, 3, 4, 5],
           work_start: config.work_start || '09:00',
           work_end: config.work_end || '18:00',
@@ -315,16 +322,22 @@ export default function SettingsPage() {
             onClick={() => setWorkExpanded(true)}
             className="w-full text-left p-3 rounded-xl bg-surface-2 border border-border-subtle hover:border-primary/30 transition-all mt-1"
           >
-            <p className="text-sm text-text-primary">
-              {workConfig.work_days_json.length > 0
-                ? workConfig.work_days_json.map(d => DAYS.find(day => day.value === d)?.label).filter(Boolean).join(' · ')
-                : 'Sin días laborales'}
-            </p>
-            <p className="text-xs text-text-secondary mt-0.5">
-              {workConfig.work_start}–{workConfig.work_end}
-              {' · '}
-              {workConfig.work_default_mode === 'presencial' ? '🏢 Presencial' : workConfig.work_default_mode === 'remoto' ? '🏠 Remoto' : '🔀 Mixto'}
-            </p>
+            {!workConfig.is_employed ? (
+              <p className="text-sm text-text-secondary">🚫 No trabaja actualmente</p>
+            ) : (
+              <>
+                <p className="text-sm text-text-primary">
+                  {workConfig.work_days_json.length > 0
+                    ? workConfig.work_days_json.map(d => DAYS.find(day => day.value === d)?.label).filter(Boolean).join(' · ')
+                    : 'Sin días laborales'}
+                </p>
+                <p className="text-xs text-text-secondary mt-0.5">
+                  {workConfig.work_start}–{workConfig.work_end}
+                  {' · '}
+                  {workConfig.work_default_mode === 'presencial' ? '🏢 Presencial' : workConfig.work_default_mode === 'remoto' ? '🏠 Remoto' : '🔀 Mixto'}
+                </p>
+              </>
+            )}
             <p className="text-xs text-primary mt-1">Tocar para editar ✏️</p>
           </button>
         )}
@@ -336,92 +349,114 @@ export default function SettingsPage() {
               El check-in pre-seleccionará tu modalidad según este horario. Podés cambiarlo ese día.
             </p>
 
-            {/* Days */}
-            <div className="mb-4">
-              <p className="text-xs text-text-secondary mb-2">Días que trabajás</p>
-              <div className="flex gap-1.5">
-                {DAYS.map(d => (
-                  <button
-                    key={d.value}
-                    onClick={() => toggleWorkDay(d.value)}
-                    className={`flex-1 py-2 rounded-xl border text-xs font-medium transition-all min-h-[36px] ${
-                      workConfig.work_days_json.includes(d.value)
-                        ? 'border-primary bg-primary/20 text-primary'
-                        : 'border-border-subtle bg-surface-2 text-text-secondary'
-                    }`}
-                  >
-                    {d.label}
-                  </button>
-                ))}
+            {/* Is employed toggle */}
+            <div className="flex items-center justify-between p-3 rounded-xl bg-surface-2 border border-border-subtle mb-4">
+              <div>
+                <p className="text-sm text-text-primary font-medium">¿Actualmente trabajás?</p>
+                <p className="text-xs text-text-secondary mt-0.5">Desactivá si dejaste de trabajar</p>
               </div>
-            </div>
-
-            {/* Hours */}
-            <div className="flex gap-3 mb-4">
-              <div className="flex-1">
-                <p className="text-xs text-text-secondary mb-1.5">Hora de entrada</p>
-                <input
-                  type="time"
-                  value={workConfig.work_start}
-                  onChange={e => setWorkConfig(p => ({ ...p, work_start: e.target.value }))}
-                  className={timeInputClass}
+              <button
+                onClick={() => setWorkConfig(p => ({ ...p, is_employed: !p.is_employed }))}
+                className={`relative w-12 h-6 rounded-full transition-colors duration-200 ${workConfig.is_employed ? 'bg-primary' : 'bg-surface border border-border-subtle'}`}
+                aria-label="Toggle employment"
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-transform duration-200 ${workConfig.is_employed ? 'translate-x-6' : 'translate-x-0'}`}
                 />
-              </div>
-              <div className="flex-1">
-                <p className="text-xs text-text-secondary mb-1.5">Hora de salida</p>
-                <input
-                  type="time"
-                  value={workConfig.work_end}
-                  onChange={e => setWorkConfig(p => ({ ...p, work_end: e.target.value }))}
-                  className={timeInputClass}
-                />
-              </div>
+              </button>
             </div>
 
-            {/* Default mode */}
-            <div className="mb-4">
-              <p className="text-xs text-text-secondary mb-2">Modalidad por defecto</p>
-              <div className="flex gap-2">
-                {([
-                  { value: 'presencial', label: '🏢 Presencial' },
-                  { value: 'remoto', label: '🏠 Remoto' },
-                  { value: 'mixto', label: '🔀 Mixto' },
-                ] as { value: 'presencial' | 'remoto' | 'mixto'; label: string }[]).map(opt => (
-                  <button
-                    key={opt.value}
-                    onClick={() => setWorkConfig(p => ({ ...p, work_default_mode: opt.value }))}
-                    className={`flex-1 py-2.5 rounded-xl border text-xs font-medium transition-all min-h-[40px] ${
-                      workConfig.work_default_mode === opt.value
-                        ? 'border-primary bg-primary/20 text-text-primary'
-                        : 'border-border-subtle bg-surface-2 text-text-secondary'
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Presential days (mixto only) */}
-            {workConfig.work_default_mode === 'mixto' && (
-              <div className="mb-4">
-                <p className="text-xs text-text-secondary mb-2">Días presenciales habituales</p>
-                <div className="flex gap-1.5">
-                  {DAYS.filter(d => workConfig.work_days_json.includes(d.value)).map(d => (
-                    <button
-                      key={d.value}
-                      onClick={() => togglePresentialDay(d.value)}
-                      className={`flex-1 py-2 rounded-xl border text-xs font-medium transition-all min-h-[36px] ${
-                        workConfig.presential_days_json.includes(d.value)
-                          ? 'border-amber-500 bg-amber-500/20 text-amber-400'
-                          : 'border-border-subtle bg-surface-2 text-text-secondary'
-                      }`}
-                    >
-                      {d.label}
-                    </button>
-                  ))}
+            {/* Days / Hours / Mode — only when employed */}
+            {workConfig.is_employed && (
+              <>
+                {/* Days */}
+                <div className="mb-4">
+                  <p className="text-xs text-text-secondary mb-2">Días que trabajás</p>
+                  <div className="flex gap-1.5">
+                    {DAYS.map(d => (
+                      <button
+                        key={d.value}
+                        onClick={() => toggleWorkDay(d.value)}
+                        className={`flex-1 py-2 rounded-xl border text-xs font-medium transition-all min-h-[36px] ${
+                          workConfig.work_days_json.includes(d.value)
+                            ? 'border-primary bg-primary/20 text-primary'
+                            : 'border-border-subtle bg-surface-2 text-text-secondary'
+                        }`}
+                      >
+                        {d.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
+
+                {/* Hours */}
+                <div className="flex gap-3 mb-4">
+                  <div className="flex-1">
+                    <p className="text-xs text-text-secondary mb-1.5">Hora de entrada</p>
+                    <input
+                      type="time"
+                      value={workConfig.work_start}
+                      onChange={e => setWorkConfig(p => ({ ...p, work_start: e.target.value }))}
+                      className={timeInputClass}
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-xs text-text-secondary mb-1.5">Hora de salida</p>
+                    <input
+                      type="time"
+                      value={workConfig.work_end}
+                      onChange={e => setWorkConfig(p => ({ ...p, work_end: e.target.value }))}
+                      className={timeInputClass}
+                    />
+                  </div>
+                </div>
+
+                {/* Default mode */}
+                <div className="mb-4">
+                  <p className="text-xs text-text-secondary mb-2">Modalidad por defecto</p>
+                  <div className="flex gap-2">
+                    {([
+                      { value: 'presencial', label: '🏢 Presencial' },
+                      { value: 'remoto', label: '🏠 Remoto' },
+                      { value: 'mixto', label: '🔀 Mixto' },
+                    ] as { value: 'presencial' | 'remoto' | 'mixto'; label: string }[]).map(opt => (
+                      <button
+                        key={opt.value}
+                        onClick={() => setWorkConfig(p => ({ ...p, work_default_mode: opt.value }))}
+                        className={`flex-1 py-2.5 rounded-xl border text-xs font-medium transition-all min-h-[40px] ${
+                          workConfig.work_default_mode === opt.value
+                            ? 'border-primary bg-primary/20 text-text-primary'
+                            : 'border-border-subtle bg-surface-2 text-text-secondary'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Presential days (mixto only) */}
+                {workConfig.work_default_mode === 'mixto' && (
+                  <div className="mb-4">
+                    <p className="text-xs text-text-secondary mb-2">Días presenciales habituales</p>
+                    <div className="flex gap-1.5">
+                      {DAYS.filter(d => workConfig.work_days_json.includes(d.value)).map(d => (
+                        <button
+                          key={d.value}
+                          onClick={() => togglePresentialDay(d.value)}
+                          className={`flex-1 py-2 rounded-xl border text-xs font-medium transition-all min-h-[36px] ${
+                            workConfig.presential_days_json.includes(d.value)
+                              ? 'border-amber-500 bg-amber-500/20 text-amber-400'
+                              : 'border-border-subtle bg-surface-2 text-text-secondary'
+                          }`}
+                        >
+                          {d.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
             )}
 
             <Button
@@ -573,7 +608,7 @@ export default function SettingsPage() {
         )}
 
         <div className="space-y-2">
-          {semesters.map(sem => (
+          {(showAllSemesters ? semesters : semesters.slice(0, 2)).map(sem => (
             <div
               key={sem.id}
               className={`flex items-center gap-3 p-4 rounded-2xl border transition-all ${
@@ -607,6 +642,17 @@ export default function SettingsPage() {
             </div>
           ))}
 
+          {semesters.length > 2 && (
+            <button
+              onClick={() => setShowAllSemesters(v => !v)}
+              className="w-full py-2 text-xs text-text-secondary hover:text-text-primary transition-colors"
+            >
+              {showAllSemesters
+                ? '▲ Ver menos'
+                : `▼ Ver todos (${semesters.length})`}
+            </button>
+          )}
+
           {semesters.length === 0 && (
             <p className="text-center text-sm text-text-secondary py-8">
               No hay cuatrimestres. Creá el primero con el botón &quot;+ Nuevo&quot;.
@@ -614,6 +660,34 @@ export default function SettingsPage() {
           )}
         </div>
       </div>
+
+      {/* ── Push Notifications ───────────────────────────────── */}
+      <Card variant="elevated">
+        <CardHeader>
+          <CardTitle>🔔 Notificaciones</CardTitle>
+          <Badge variant={pushSubscribed ? 'success' : 'default'}>
+            {!pushSupported ? 'No soportado' : pushSubscribed ? 'Activadas' : 'Desactivadas'}
+          </Badge>
+        </CardHeader>
+        <p className="text-xs text-text-secondary mb-4">
+          {!pushSupported
+            ? 'Tu navegador no soporta notificaciones push.'
+            : pushPermission === 'denied'
+              ? 'Notificaciones bloqueadas. Activálas desde la configuración del navegador.'
+              : 'Recibí recordatorios: check-in matutino, registro post-clase, y más.'}
+        </p>
+        {pushSupported && pushPermission !== 'denied' && (
+          <Button
+            variant={pushSubscribed ? 'secondary' : 'primary'}
+            size="md"
+            className="w-full"
+            onClick={pushSubscribed ? unsubscribePush : subscribePush}
+            loading={pushLoading}
+          >
+            {pushSubscribed ? '🔕 Desactivar notificaciones' : '🔔 Activar notificaciones'}
+          </Button>
+        )}
+      </Card>
 
       {/* App info */}
       <Card variant="bordered">

@@ -46,7 +46,19 @@ export async function POST(req: Request) {
             mediaBlock as any,
             {
               type: 'text',
-              text: 'Extraé el temario/programa de la materia de este documento. Devolvé ÚNICAMENTE un JSON array sin markdown ni texto adicional: [{"unit":"Nombre Unidad","topics":["Tema 1","Tema 2"]}]. Solo el array JSON, nada más.',
+              text: `Extraé el temario/programa de la materia de este documento.
+
+REGLAS IMPORTANTES:
+1. Las UNIDADES son las secciones principales (Unidad 1, Unidad 2, Capítulo 1, Módulo A, etc.)
+2. Los TEMAS son los puntos individuales DENTRO de cada unidad (subtemas, ítems de lista)
+3. NUNCA pongas todos los temas en una sola unidad — identificá las secciones reales
+4. Si el documento no tiene secciones claras, inferí la estructura jerárquica del contenido
+5. Cada unidad debería tener entre 2 y 15 temas como máximo
+
+Devolvé ÚNICAMENTE un JSON array sin markdown ni texto adicional:
+[{"unit":"Nombre de la Unidad","topics":["Tema específico 1","Tema específico 2"]}]
+
+Solo el array JSON, absolutamente nada más antes ni después.`,
             },
           ],
         },

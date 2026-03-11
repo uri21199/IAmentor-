@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { format, parseISO, differenceInDays } from 'date-fns'
 import { createClient } from '@/lib/supabase'
 import { Card, CardHeader, CardTitle } from '@/components/ui/Card'
@@ -13,6 +14,11 @@ import { EmojiSelector, UNDERSTANDING_OPTIONS } from '@/components/ui/EmojiSelec
 import { getDaysColor, getEventTypeLabel } from '@/lib/study-priority'
 import type { SubjectWithDetails, AcademicEvent, Topic, TopicStatus, AcademicEventType } from '@/types'
 
+// How many topics to show before collapsing per unit
+const TOPICS_SHOWN_DEFAULT = 4
+// How many class logs to show before collapsing
+const LOGS_SHOWN_DEFAULT = 3
+
 interface Props {
   subject: SubjectWithDetails
   events: AcademicEvent[]
@@ -23,6 +29,7 @@ interface Props {
 
 export default function SubjectDetailClient({ subject, events, classLogs, today, userId }: Props) {
   const supabase = createClient()
+  const router = useRouter()
 
   // ── Topic statuses (optimistic updates) ───────────────────
   const [unitTopics, setUnitTopics] = useState<Record<string, Topic[]>>(
@@ -37,6 +44,15 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
   // ── Class logs (local state for CRUD) ─────────────────────
   const [localClassLogs, setLocalClassLogs] = useState<any[]>(classLogs)
   const [editingLogId, setEditingLogId] = useState<string | null>(null)
+  const [showAllLogs, setShowAllLogs] = useState(false)
+
+  // ── Collapsible unit topics ────────────────────────────────
+  // true = collapsed (show only TOPICS_SHOWN_DEFAULT), false/missing = expanded
+  const [collapsedUnits, setCollapsedUnits] = useState<Record<string, boolean>>(
+    Object.fromEntries(
+      subject.units.map(u => [u.id, (u.topics?.length ?? 0) > TOPICS_SHOWN_DEFAULT])
+    )
+  )
 
   // ── Add unit ──────────────────────────────────────────────
   const [showAddUnit, setShowAddUnit] = useState(false)
@@ -64,7 +80,7 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
   const [quickTopicName, setQuickTopicName] = useState('')
   const [quickAdding, setQuickAdding] = useState(false)
 
-  // ── Event modal ───────────────────────────────────────────
+  // ── Event modal (create) ──────────────────────────────────
   const [showEventForm, setShowEventForm] = useState(false)
   const [eventData, setEventData] = useState({
     type: 'parcial' as AcademicEventType,
@@ -73,10 +89,31 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
     notes: '',
   })
   const [eventLoading, setEventLoading] = useState(false)
+
+  // ── Event modal (edit) ────────────────────────────────────
+  const [editingEventId, setEditingEventId] = useState<string | null>(null)
+  const [editEventData, setEditEventData] = useState({
+    type: 'parcial' as AcademicEventType,
+    title: '',
+    date: '',
+    notes: '',
+  })
+  const [editEventLoading, setEditEventLoading] = useState(false)
+
+  // ── Local events state ────────────────────────────────────
   const [localEvents, setLocalEvents] = useState<AcademicEvent[]>(events)
 
   // ── Events accordion ──────────────────────────────────────
   const [showAllEvents, setShowAllEvents] = useState(false)
+
+  // ── AI syllabus upload ────────────────────────────────────
+  const [syllabusFile, setSyllabusFile] = useState<File | null>(null)
+  const [parsingSyllabus, setParsingSyllabus] = useState(false)
+  const [syllabusResult, setSyllabusResult] = useState<{ units: number; topics: number } | null>(null)
+
+  // ── AI events import ──────────────────────────────────────
+  const [eventsFile, setEventsFile] = useState<File | null>(null)
+  const [parsingEvents, setParsingEvents] = useState(false)
 
   // ── Topic status change ───────────────────────────────────
   async function handleTopicStatusChange(topicId: string, status: TopicStatus) {
@@ -91,6 +128,8 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
       .from('topics')
       .update({ status, last_studied: new Date().toISOString() })
       .eq('id', topicId)
+    // Refresh server cache so subject list shows updated progress on back navigation
+    router.refresh()
   }
 
   // ── Add unit ──────────────────────────────────────────────
@@ -245,7 +284,7 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
         }
       }
 
-      // Auto-create academic_event for homework with due_date
+      // Auto-create academic_event for homework with due_date (new logs only)
       if (classLogData.has_homework && classLogData.due_date && !editingLogId) {
         const { data: newEvent, error: evErr } = await supabase
           .from('academic_events')
@@ -267,6 +306,7 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
       setShowClassLog(false)
       setEditingLogId(null)
       setClassLogData({ understanding_level: 3, has_homework: false, homework_description: '', due_date: '', topics_covered: [] })
+      router.refresh()
     } finally {
       setLogLoading(false)
     }
@@ -276,9 +316,10 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
   async function deleteClassLog(id: string) {
     await supabase.from('class_logs').delete().eq('id', id)
     setLocalClassLogs(prev => prev.filter(l => l.id !== id))
+    router.refresh()
   }
 
-  // ── Academic event ────────────────────────────────────────
+  // ── Academic event — create ───────────────────────────────
   async function saveEvent() {
     setEventLoading(true)
     try {
@@ -291,9 +332,108 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
         setLocalEvents(prev => [...prev, data].sort((a, b) => a.date.localeCompare(b.date)))
         setShowEventForm(false)
         setEventData({ type: 'parcial', title: '', date: '', notes: '' })
+        router.refresh()
       }
     } finally {
       setEventLoading(false)
+    }
+  }
+
+  // ── Academic event — open edit modal ─────────────────────
+  function openEditEvent(event: AcademicEvent) {
+    setEditingEventId(event.id)
+    setEditEventData({
+      type: event.type,
+      title: event.title,
+      date: event.date,
+      notes: event.notes || '',
+    })
+  }
+
+  // ── Academic event — save edit ────────────────────────────
+  async function updateEvent() {
+    if (!editingEventId) return
+    setEditEventLoading(true)
+    try {
+      const { data, error } = await supabase
+        .from('academic_events')
+        .update(editEventData)
+        .eq('id', editingEventId)
+        .select()
+        .single()
+      if (!error && data) {
+        setLocalEvents(prev =>
+          prev.map(e => e.id === editingEventId ? data : e)
+            .sort((a, b) => a.date.localeCompare(b.date))
+        )
+        setEditingEventId(null)
+        router.refresh()
+      }
+    } finally {
+      setEditEventLoading(false)
+    }
+  }
+
+  // ── Academic event — delete ───────────────────────────────
+  async function deleteEvent(id: string) {
+    if (!confirm('¿Eliminar esta fecha importante?')) return
+    await supabase.from('academic_events').delete().eq('id', id)
+    setLocalEvents(prev => prev.filter(e => e.id !== id))
+    router.refresh()
+  }
+
+  // ── AI syllabus import ────────────────────────────────────
+  async function importSyllabus() {
+    if (!syllabusFile) return
+    if (syllabusFile.size > 5_000_000) {
+      alert('El archivo es muy grande (máx 5MB)')
+      return
+    }
+    setParsingSyllabus(true)
+    setSyllabusResult(null)
+    try {
+      const fd = new FormData()
+      fd.append('file', syllabusFile)
+      fd.append('subject_id', subject.id)
+      const res = await fetch('/api/ai/parse-syllabus', { method: 'POST', body: fd })
+      const result = await res.json()
+      if (result.error) throw new Error(result.error)
+      setSyllabusResult(result)
+      setSyllabusFile(null)
+      router.refresh()
+    } catch (err: any) {
+      alert('Error al importar temario: ' + (err.message || 'desconocido'))
+    } finally {
+      setParsingSyllabus(false)
+    }
+  }
+
+  // ── AI events import ──────────────────────────────────────
+  async function importEvents() {
+    if (!eventsFile) return
+    if (eventsFile.size > 5_000_000) {
+      alert('El archivo es muy grande (máx 5MB)')
+      return
+    }
+    setParsingEvents(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', eventsFile)
+      fd.append('subject_id', subject.id)
+      const res = await fetch('/api/ai/parse-events', { method: 'POST', body: fd })
+      const result = await res.json()
+      if (result.error) throw new Error(result.error)
+      if (result.events?.length > 0) {
+        setLocalEvents(prev =>
+          [...prev, ...result.events].sort((a: AcademicEvent, b: AcademicEvent) => a.date.localeCompare(b.date))
+        )
+      }
+      setEventsFile(null)
+      router.refresh()
+    } catch (err: any) {
+      alert('Error al importar fechas: ' + (err.message || 'desconocido'))
+    } finally {
+      setParsingEvents(false)
     }
   }
 
@@ -306,6 +446,9 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
 
   // Events accordion: show first 2 by default
   const visibleEvents = showAllEvents ? upcomingEvts : upcomingEvts.slice(0, 2)
+
+  // Class logs accordion: show first LOGS_SHOWN_DEFAULT (already sorted most recent first by page.tsx)
+  const visibleLogs = showAllLogs ? localClassLogs : localClassLogs.slice(0, LOGS_SHOWN_DEFAULT)
 
   // ── Shared input classes ──────────────────────────────────
   const inlineInput = 'flex-1 h-9 px-3 rounded-xl bg-surface-2 border border-border-subtle text-sm text-text-primary placeholder-text-secondary focus:outline-none focus:border-primary/60'
@@ -369,7 +512,7 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
         <div>
           <h2 className="text-sm font-semibold text-text-primary mb-2">Historial de clases</h2>
           <div className="space-y-2">
-            {localClassLogs.map(log => (
+            {visibleLogs.map(log => (
               <div key={log.id} className="flex items-center gap-3 p-3 rounded-2xl bg-surface border border-border-subtle">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
@@ -410,47 +553,102 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
               </div>
             ))}
           </div>
-        </div>
-      )}
-
-      {/* Upcoming events (with accordion) */}
-      {upcomingEvts.length > 0 && (
-        <div>
-          <h2 className="text-sm font-semibold text-text-primary mb-2">Fechas importantes</h2>
-          <div className="space-y-2">
-            {visibleEvents.map(event => {
-              const days  = differenceInDays(parseISO(event.date), new Date())
-              const color = getDaysColor(days)
-              return (
-                <div key={event.id} className="flex items-center gap-3 p-3 rounded-2xl bg-surface border border-border-subtle">
-                  <div className={`w-2 h-2 rounded-full ${color === 'red' ? 'bg-red-500' : color === 'amber' ? 'bg-amber-500' : 'bg-green-500'}`} />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-text-primary">{event.title}</p>
-                    <p className="text-xs text-text-secondary">{getEventTypeLabel(event.type)}</p>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <Badge variant={color === 'red' ? 'danger' : color === 'amber' ? 'warning' : 'success'}>
-                      {days === 0 ? 'Hoy' : days === 1 ? 'Mañana' : `${days}d`}
-                    </Badge>
-                    <p className="text-xs text-text-secondary mt-1">{format(parseISO(event.date), 'dd/MM')}</p>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-          {/* Accordion toggle */}
-          {upcomingEvts.length > 2 && (
+          {/* Logs accordion toggle */}
+          {localClassLogs.length > LOGS_SHOWN_DEFAULT && (
             <button
-              onClick={() => setShowAllEvents(e => !e)}
+              onClick={() => setShowAllLogs(v => !v)}
               className="mt-2 w-full py-2 text-xs text-text-secondary hover:text-text-primary transition-colors"
             >
-              {showAllEvents
+              {showAllLogs
                 ? '▲ Ver menos'
-                : `▼ Ver todas (${upcomingEvts.length})`}
+                : `▼ Ver todos (${localClassLogs.length})`}
             </button>
           )}
         </div>
       )}
+
+      {/* Upcoming events (with accordion) */}
+      <div>
+        <h2 className="text-sm font-semibold text-text-primary mb-2">Fechas importantes</h2>
+
+        {/* AI events import */}
+        <div className="mb-3 p-3 rounded-2xl border border-dashed border-border-subtle bg-surface-2">
+          <p className="text-xs text-text-secondary mb-2">📸 Importar fechas con IA (calendario, imagen o PDF)</p>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="file"
+              accept="image/*,.pdf"
+              className="hidden"
+              onChange={e => setEventsFile(e.target.files?.[0] ?? null)}
+            />
+            <span className="text-xs text-primary underline">
+              {eventsFile ? `📎 ${eventsFile.name}` : 'Elegir archivo…'}
+            </span>
+          </label>
+          {eventsFile && (
+            <button
+              onClick={importEvents}
+              disabled={parsingEvents}
+              className="mt-2 w-full py-2 rounded-xl bg-primary text-white text-xs font-medium disabled:opacity-50"
+            >
+              {parsingEvents ? '⏳ Importando fechas…' : '⚡ Importar fechas'}
+            </button>
+          )}
+        </div>
+
+        {upcomingEvts.length > 0 && (
+          <div>
+            <div className="space-y-2">
+              {visibleEvents.map(event => {
+                const days  = differenceInDays(parseISO(event.date), new Date())
+                const color = getDaysColor(days)
+                return (
+                  <div key={event.id} className="flex items-center gap-2 p-3 rounded-2xl bg-surface border border-border-subtle">
+                    <div className={`w-2 h-2 rounded-full shrink-0 ${color === 'red' ? 'bg-red-500' : color === 'amber' ? 'bg-amber-500' : 'bg-green-500'}`} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-text-primary">{event.title}</p>
+                      <p className="text-xs text-text-secondary">{getEventTypeLabel(event.type)}</p>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <div className="text-right mr-1">
+                        <Badge variant={color === 'red' ? 'danger' : color === 'amber' ? 'warning' : 'success'}>
+                          {days === 0 ? 'Hoy' : days === 1 ? 'Mañana' : `${days}d`}
+                        </Badge>
+                        <p className="text-xs text-text-secondary mt-1">{format(parseISO(event.date), 'dd/MM')}</p>
+                      </div>
+                      <button
+                        onClick={() => openEditEvent(event)}
+                        className="w-8 h-8 flex items-center justify-center rounded-xl bg-surface-2 text-text-secondary hover:text-text-primary transition-colors text-sm"
+                        title="Editar"
+                      >
+                        ✎
+                      </button>
+                      <button
+                        onClick={() => deleteEvent(event.id)}
+                        className="w-8 h-8 flex items-center justify-center rounded-xl bg-red-500/10 text-red-400 hover:text-red-300 transition-colors text-sm"
+                        title="Eliminar"
+                      >
+                        🗑
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+            {/* Accordion toggle */}
+            {upcomingEvts.length > 2 && (
+              <button
+                onClick={() => setShowAllEvents(e => !e)}
+                className="mt-2 w-full py-2 text-xs text-text-secondary hover:text-text-primary transition-colors"
+              >
+                {showAllEvents
+                  ? '▲ Ver menos'
+                  : `▼ Ver todas (${upcomingEvts.length})`}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* ── Temario (units + topics) ──────────────────────────── */}
       <div className="space-y-4">
@@ -461,66 +659,114 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
           )}
         </div>
 
+        {/* AI syllabus import */}
+        <div className="p-3 rounded-2xl border border-dashed border-border-subtle bg-surface-2">
+          <p className="text-xs text-text-secondary mb-2">📤 Importar temario con IA (imagen o PDF)</p>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="file"
+              accept="image/*,.pdf"
+              className="hidden"
+              onChange={e => setSyllabusFile(e.target.files?.[0] ?? null)}
+            />
+            <span className="text-xs text-primary underline">
+              {syllabusFile ? `📎 ${syllabusFile.name}` : 'Elegir archivo…'}
+            </span>
+          </label>
+          {syllabusFile && (
+            <button
+              onClick={importSyllabus}
+              disabled={parsingSyllabus}
+              className="mt-2 w-full py-2 rounded-xl bg-primary text-white text-xs font-medium disabled:opacity-50"
+            >
+              {parsingSyllabus ? '⏳ Importando…' : '⚡ Importar temario'}
+            </button>
+          )}
+          {syllabusResult && (
+            <p className="text-xs text-green-400 mt-1.5">
+              ✅ {syllabusResult.units} unidades, {syllabusResult.topics} temas importados
+            </p>
+          )}
+        </div>
+
         {localUnits.length === 0 && (
-          <p className="text-xs text-text-secondary text-center py-4">
-            Aún no hay unidades. Agregá la primera para empezar a organizar los temas.
+          <p className="text-xs text-text-secondary text-center py-2">
+            Aún no hay unidades. Importá el temario o agregá la primera unidad manualmente.
           </p>
         )}
 
-        {localUnits.map(unit => (
-          <div key={unit.id}>
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
-                {unit.name}
-              </p>
-              <button
-                onClick={() => { setAddingTopicForUnit(unit.id); setNewTopicName('') }}
-                className="text-xs text-primary hover:text-primary/80 transition-colors px-1 min-h-[28px]"
-              >
-                + Tema
-              </button>
-            </div>
+        {localUnits.map(unit => {
+          const topics = unitTopics[unit.id] || []
+          const isCollapsed = collapsedUnits[unit.id] ?? false
+          const visibleTopics = isCollapsed ? topics.slice(0, TOPICS_SHOWN_DEFAULT) : topics
 
-            {addingTopicForUnit === unit.id && (
-              <div className="flex gap-2 mb-2">
-                <input
-                  type="text"
-                  value={newTopicName}
-                  onChange={e => setNewTopicName(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter') addTopic(unit.id)
-                    if (e.key === 'Escape') { setAddingTopicForUnit(null); setNewTopicName('') }
-                  }}
-                  placeholder="Nombre del tema (ej: Proteínas, Recursividad…)"
-                  autoFocus
-                  className={inlineInput}
-                />
+          return (
+            <div key={unit.id}>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
+                  {unit.name}
+                </p>
                 <button
-                  onClick={() => addTopic(unit.id)}
-                  disabled={!newTopicName.trim() || addingTopic}
-                  className="w-9 h-9 flex items-center justify-center rounded-xl bg-primary text-white text-sm font-medium disabled:opacity-40"
+                  onClick={() => { setAddingTopicForUnit(unit.id); setNewTopicName('') }}
+                  className="text-xs text-primary hover:text-primary/80 transition-colors px-1 min-h-[28px]"
                 >
-                  {addingTopic ? '…' : '✓'}
-                </button>
-                <button
-                  onClick={() => { setAddingTopicForUnit(null); setNewTopicName('') }}
-                  className="w-9 h-9 flex items-center justify-center rounded-xl bg-surface-2 text-text-secondary"
-                >
-                  ✕
+                  + Tema
                 </button>
               </div>
-            )}
 
-            <div className="flex flex-wrap gap-2">
-              {(unitTopics[unit.id] || []).map(topic => (
-                <TopicPill key={topic.id} topic={topic} onStatusChange={handleTopicStatusChange} compact />
-              ))}
-              {(unitTopics[unit.id] || []).length === 0 && addingTopicForUnit !== unit.id && (
-                <p className="text-xs text-text-secondary italic">Sin temas — usá "+ Tema" para agregar</p>
+              {addingTopicForUnit === unit.id && (
+                <div className="flex gap-2 mb-2">
+                  <input
+                    type="text"
+                    value={newTopicName}
+                    onChange={e => setNewTopicName(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') addTopic(unit.id)
+                      if (e.key === 'Escape') { setAddingTopicForUnit(null); setNewTopicName('') }
+                    }}
+                    placeholder="Nombre del tema (ej: Proteínas, Recursividad…)"
+                    autoFocus
+                    className={inlineInput}
+                  />
+                  <button
+                    onClick={() => addTopic(unit.id)}
+                    disabled={!newTopicName.trim() || addingTopic}
+                    className="w-9 h-9 flex items-center justify-center rounded-xl bg-primary text-white text-sm font-medium disabled:opacity-40"
+                  >
+                    {addingTopic ? '…' : '✓'}
+                  </button>
+                  <button
+                    onClick={() => { setAddingTopicForUnit(null); setNewTopicName('') }}
+                    className="w-9 h-9 flex items-center justify-center rounded-xl bg-surface-2 text-text-secondary"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+
+              <div className="flex flex-wrap gap-2">
+                {visibleTopics.map(topic => (
+                  <TopicPill key={topic.id} topic={topic} onStatusChange={handleTopicStatusChange} compact />
+                ))}
+                {topics.length === 0 && addingTopicForUnit !== unit.id && (
+                  <p className="text-xs text-text-secondary italic">Sin temas — usá "+ Tema" para agregar</p>
+                )}
+              </div>
+
+              {/* Collapsible toggle for unit topics */}
+              {topics.length > TOPICS_SHOWN_DEFAULT && (
+                <button
+                  onClick={() => setCollapsedUnits(prev => ({ ...prev, [unit.id]: !prev[unit.id] }))}
+                  className="mt-1.5 text-xs text-text-secondary hover:text-text-primary transition-colors"
+                >
+                  {isCollapsed
+                    ? `▼ Ver todos (${topics.length})`
+                    : '▲ Ver menos'}
+                </button>
               )}
             </div>
-          </div>
-        ))}
+          )
+        })}
 
         {showAddUnit ? (
           <div className="flex gap-2 mt-2">
@@ -767,7 +1013,7 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
         </div>
       )}
 
-      {/* ── Event form modal ─────────────────────────────────── */}
+      {/* ── Event form modal (create) ─────────────────────────── */}
       {showEventForm && (
         <div className="fixed inset-0 z-50 flex items-end justify-center px-4 pt-4 pb-24 bg-black/60 backdrop-blur-sm">
           <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-3xl p-5 shadow-2xl">
@@ -840,6 +1086,85 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
                 disabled={!eventData.title || !eventData.date}
               >
                 Guardar fecha
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Event edit modal ──────────────────────────────────── */}
+      {editingEventId && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center px-4 pt-4 pb-24 bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-3xl p-5 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-semibold text-text-primary">✎ Editar fecha</h3>
+              <button
+                onClick={() => setEditingEventId(null)}
+                className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <p className="text-sm text-text-secondary mb-1.5">Tipo</p>
+                <div className="flex gap-2">
+                  {([
+                    { value: 'parcial', label: '📝 Parcial' },
+                    { value: 'parcial_intermedio', label: '📋 Parcial Int.' },
+                    { value: 'entrega_tp', label: '📄 Entrega TP' },
+                  ] as { value: AcademicEventType; label: string }[]).map(opt => (
+                    <button
+                      key={opt.value}
+                      onClick={() => setEditEventData(d => ({ ...d, type: opt.value }))}
+                      className={`flex-1 py-2.5 rounded-xl border text-xs transition-all min-h-[44px] ${
+                        editEventData.type === opt.value
+                          ? 'border-primary bg-primary/20 text-text-primary'
+                          : 'border-border-subtle bg-surface-2 text-text-secondary'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <input
+                type="text"
+                value={editEventData.title}
+                onChange={e => setEditEventData(d => ({ ...d, title: e.target.value }))}
+                placeholder="Título"
+                className={modalInput}
+              />
+
+              <input
+                type="date"
+                value={editEventData.date}
+                onChange={e => setEditEventData(d => ({ ...d, date: e.target.value }))}
+                className={modalInput}
+              />
+
+              <textarea
+                value={editEventData.notes}
+                onChange={e => setEditEventData(d => ({ ...d, notes: e.target.value }))}
+                placeholder="Notas opcionales..."
+                className="w-full h-16 px-4 py-3 rounded-2xl bg-surface-2 border border-border-subtle text-sm text-text-primary placeholder-text-secondary resize-none focus:outline-none focus:border-primary/60"
+              />
+            </div>
+
+            <div className="flex gap-3 mt-4">
+              <Button variant="secondary" className="flex-1" onClick={() => setEditingEventId(null)}>
+                Cancelar
+              </Button>
+              <Button
+                variant="primary"
+                className="flex-1"
+                onClick={updateEvent}
+                loading={editEventLoading}
+                disabled={!editEventData.title || !editEventData.date}
+              >
+                Guardar cambios
               </Button>
             </div>
           </div>

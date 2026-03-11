@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
     // Get check-in for context
     const { data: checkin } = await supabase
       .from('checkins')
-      .select('energy_level, stress_level')
+      .select('energy_level, stress_level, unexpected_events')
       .eq('user_id', user.id)
       .eq('date', today)
       .single()
@@ -45,6 +45,7 @@ export async function POST(req: NextRequest) {
       {
         energy_level: checkin?.energy_level || 3,
         stress_level: checkin?.stress_level || 'low',
+        unexpected_events: checkin?.unexpected_events || null,
       }
     )
 

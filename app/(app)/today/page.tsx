@@ -27,8 +27,41 @@ export default async function TodayPage({
 
   if (!userConfig) redirect('/onboarding')
 
+  // ── Active semester subject IDs (for event filtering) ────
+  // Events should only show for the active semester's subjects
+  const { data: activeSemRows } = await supabase
+    .from('semesters')
+    .select('id')
+    .eq('user_id', user.id)
+    .eq('is_active', true)
+    .order('created_at', { ascending: false })
+    .limit(1)
+
+  let activeSubjectIds: string[] = []
+  if (activeSemRows?.[0]) {
+    const { data: semSubs } = await supabase
+      .from('subjects')
+      .select('id')
+      .eq('semester_id', activeSemRows[0].id)
+    activeSubjectIds = (semSubs || []).map((s: any) => s.id)
+  }
+
   // ── Parallel DB queries ───────────────────────────────────
   const in30Days = format(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), 'yyyy-MM-dd')
+
+  // Build events query — scoped to active semester if available
+  const eventsBaseQ = supabase
+    .from('academic_events')
+    .select('*, subjects(name, color)')
+    .eq('user_id', user.id)
+    .gte('date', today)
+    .lte('date', in30Days)
+    .order('date', { ascending: true })
+    .limit(5)
+  const eventsQ = activeSubjectIds.length > 0
+    ? eventsBaseQ.in('subject_id', activeSubjectIds)
+    : eventsBaseQ
+
   const [
     { data: checkin },
     { data: plan },
@@ -38,9 +71,7 @@ export default async function TodayPage({
   ] = await Promise.all([
     supabase.from('checkins').select('*').eq('user_id', user.id).eq('date', today).single(),
     supabase.from('daily_plans').select('*').eq('user_id', user.id).eq('date', today).single(),
-    supabase.from('academic_events').select('*, subjects(name, color)')
-      .eq('user_id', user.id).gte('date', today).lte('date', in30Days)
-      .order('date', { ascending: true }).limit(5),
+    eventsQ,
     supabase.from('checkins').select('date, energy_level')
       .eq('user_id', user.id).order('date', { ascending: false }).limit(7),
     supabase.from('subjects').select('id, name, color, units(id, name, order_index, topics(id, name, status))')
