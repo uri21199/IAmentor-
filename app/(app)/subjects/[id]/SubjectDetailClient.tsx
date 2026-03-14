@@ -109,8 +109,10 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
   const [movingTopic, setMovingTopic] = useState<{ id: string; name: string; fromUnitId: string } | null>(null)
   const [topicActionLoading, setTopicActionLoading] = useState(false)
 
-  // ── Collapsible units in class log modal ──────────────────
-  const [classLogCollapsed, setClassLogCollapsed] = useState<Record<string, boolean>>({})
+  // ── Collapsible units in class log modal — start all collapsed ──
+  const [classLogCollapsed, setClassLogCollapsed] = useState<Record<string, boolean>>(
+    Object.fromEntries(subject.units.map(u => [u.id, true]))
+  )
   const [editEventLoading, setEditEventLoading] = useState(false)
 
   // ── Local events state ────────────────────────────────────

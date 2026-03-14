@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { format } from 'date-fns'
+import { usePathname } from 'next/navigation'
 import { createClient } from '@/lib/supabase'
 import Button from '@/components/ui/Button'
 import { getTodayArg } from '@/lib/utils'
@@ -60,17 +61,20 @@ function ImprevistoModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <ModalShell title="Imprevisto" onClose={onClose}>
+    <ModalShell title="⚡ Imprevisto" onClose={onClose}>
+      <p className="text-xs text-text-secondary mb-3">
+        Contanos qué cambió y la IA reorganizará los bloques pendientes del día.
+      </p>
       <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden mb-3">
         <div className="flex items-start gap-3 px-4 py-3">
-          <svg className="w-4 h-4 text-text-secondary shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <svg className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h7" />
           </svg>
           <textarea
             value={text}
             onChange={e => setText(e.target.value)}
-            placeholder="¿Qué pasó? La IA reorganizará tu día..."
-            rows={4}
+            placeholder="Ej: Tuve una reunión imprevista de 2hs, llegué tarde, el parcial se adelantó..."
+            rows={5}
             autoFocus
             className="flex-1 bg-transparent text-sm text-text-primary placeholder-text-secondary resize-none focus:outline-none"
           />
@@ -78,7 +82,7 @@ function ImprevistoModal({ onClose }: { onClose: () => void }) {
       </div>
       {success && (
         <div className="mb-3 p-3 rounded-2xl bg-green-500/10 border border-green-500/20">
-          <p className="text-sm text-green-400 text-center">Plan actualizado</p>
+          <p className="text-sm text-green-400 text-center">✅ Plan actualizado</p>
         </div>
       )}
       <Button
@@ -88,7 +92,7 @@ function ImprevistoModal({ onClose }: { onClose: () => void }) {
         loading={loading}
         disabled={!text.trim()}
       >
-        Replanificar con IA
+        ✨ Replanificar con IA
       </Button>
     </ModalShell>
   )
@@ -101,19 +105,29 @@ function PostClaseModal({ subjectsData, userId, onClose }: { subjectsData: Subje
 
   const [subjectId, setSubjectId] = useState('')
   const [topicIds, setTopicIds] = useState<string[]>([])
-  const [topicSearch, setTopicSearch] = useState('')
   const [understanding, setUnderstanding] = useState(3)
   const [hasHomework, setHasHomework] = useState(false)
   const [homeworkDesc, setHomeworkDesc] = useState('')
   const [dueDate, setDueDate] = useState('')
   const [saving, setSaving] = useState(false)
   const [success, setSuccess] = useState(false)
+  // Units collapsed state — all start collapsed
+  const [collapsedUnits, setCollapsedUnits] = useState<Record<string, boolean>>({})
 
   const selectedSubject = subjectsData.find(s => s.id === subjectId)
-  const allTopics = selectedSubject?.units.flatMap(u => u.topics) ?? []
 
   function toggleTopic(id: string) {
     setTopicIds(prev => prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id])
+  }
+
+  function handleSubjectChange(id: string) {
+    setSubjectId(id)
+    setTopicIds([])
+    // Collapse all units when subject changes
+    const newSubject = subjectsData.find(s => s.id === id)
+    if (newSubject) {
+      setCollapsedUnits(Object.fromEntries(newSubject.units.map(u => [u.id, true])))
+    }
   }
 
   async function save() {
@@ -130,7 +144,6 @@ function PostClaseModal({ subjectsData, userId, onClose }: { subjectsData: Subje
         homework_description: hasHomework ? homeworkDesc || null : null,
         due_date: hasHomework && dueDate ? dueDate : null,
       })
-      // Update topic statuses to 'yellow' if they were 'red'
       if (topicIds.length > 0) {
         await supabase
           .from('topics')
@@ -146,11 +159,11 @@ function PostClaseModal({ subjectsData, userId, onClose }: { subjectsData: Subje
   }
 
   const LEVELS = [
-    { v: 1, label: 'Muy poco' },
-    { v: 2, label: 'Poco' },
-    { v: 3, label: 'Regular' },
-    { v: 4, label: 'Bien' },
-    { v: 5, label: 'Muy bien' },
+    { v: 1, emoji: '😕', label: 'Muy poco' },
+    { v: 2, emoji: '😐', label: 'Poco' },
+    { v: 3, emoji: '🙂', label: 'Regular' },
+    { v: 4, emoji: '😊', label: 'Bien' },
+    { v: 5, emoji: '🤩', label: 'Muy bien' },
   ]
 
   return (
@@ -170,7 +183,7 @@ function PostClaseModal({ subjectsData, userId, onClose }: { subjectsData: Subje
               </svg>
               <select
                 value={subjectId}
-                onChange={e => { setSubjectId(e.target.value); setTopicIds([]); setTopicSearch('') }}
+                onChange={e => handleSubjectChange(e.target.value)}
                 className="flex-1 bg-transparent text-sm text-text-primary focus:outline-none"
               >
                 <option value="">Seleccionar materia</option>
@@ -181,65 +194,75 @@ function PostClaseModal({ subjectsData, userId, onClose }: { subjectsData: Subje
             </div>
           </div>
 
-          {/* Topics covered */}
-          {subjectId && allTopics.length > 0 && (
-            <div className="rounded-2xl bg-surface-2 border border-border-subtle p-4">
-              <div className="flex items-center justify-between mb-2.5">
-                <p className="text-xs text-text-secondary">Temas vistos en clase</p>
+          {/* Topics covered — grouped by unit, all collapsed by default */}
+          {subjectId && selectedSubject && selectedSubject.units.some(u => u.topics.length > 0) && (
+            <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
+                <p className="text-xs font-medium text-text-secondary">Temas vistos en clase</p>
                 {topicIds.length > 0 && (
                   <span className="text-xs text-primary font-medium">{topicIds.length} seleccionado{topicIds.length !== 1 ? 's' : ''}</span>
                 )}
               </div>
-              {allTopics.length > 5 && (
-                <div className="mb-2.5">
-                  <input
-                    type="text"
-                    value={topicSearch}
-                    onChange={e => setTopicSearch(e.target.value)}
-                    placeholder="Buscar tema..."
-                    className="w-full bg-surface border border-border-subtle rounded-xl px-3 py-2 text-xs text-text-primary placeholder-text-secondary focus:outline-none focus:border-primary/50"
-                  />
-                </div>
-              )}
-              <div className="flex flex-wrap gap-2 max-h-44 overflow-y-auto">
-                {(topicSearch.trim()
-                  ? allTopics.filter(t => t.name.toLowerCase().includes(topicSearch.toLowerCase()))
-                  : allTopics
-                ).map(t => (
-                  <button
-                    key={t.id}
-                    onClick={() => toggleTopic(t.id)}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-medium border transition-all ${
-                      topicIds.includes(t.id)
-                        ? 'border-primary bg-primary/20 text-primary'
-                        : 'border-border-subtle bg-surface text-text-secondary'
-                    }`}
-                  >
-                    {t.status === 'green' ? '🟢' : t.status === 'yellow' ? '🟡' : '🔴'} {t.name}
-                  </button>
-                ))}
-                {topicSearch.trim() && allTopics.filter(t => t.name.toLowerCase().includes(topicSearch.toLowerCase())).length === 0 && (
-                  <p className="text-xs text-text-secondary">Sin resultados</p>
-                )}
-              </div>
+              {selectedSubject.units.filter(u => u.topics.length > 0).map((unit, uIdx, arr) => {
+                const isCollapsed = collapsedUnits[unit.id] ?? true
+                const selectedInUnit = unit.topics.filter(t => topicIds.includes(t.id)).length
+                return (
+                  <div key={unit.id} className={uIdx > 0 ? 'border-t border-border-subtle' : ''}>
+                    <button
+                      onClick={() => setCollapsedUnits(p => ({ ...p, [unit.id]: !p[unit.id] }))}
+                      className="w-full flex items-center justify-between px-4 py-2.5"
+                    >
+                      <p className="text-xs font-semibold text-text-secondary uppercase tracking-wider truncate max-w-[60%]">{unit.name}</p>
+                      <div className="flex items-center gap-2">
+                        {selectedInUnit > 0 && (
+                          <span className="text-xs text-primary font-medium">{selectedInUnit} ✓</span>
+                        )}
+                        <span className="text-xs text-text-secondary">{unit.topics.length}</span>
+                        <svg className={`w-3.5 h-3.5 text-text-secondary transition-transform ${isCollapsed ? '' : 'rotate-180'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </div>
+                    </button>
+                    {!isCollapsed && (
+                      <div className="px-4 pb-3">
+                        <div className="flex flex-wrap gap-2">
+                          {unit.topics.map(t => (
+                            <button
+                              key={t.id}
+                              onClick={() => toggleTopic(t.id)}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-medium border transition-all ${
+                                topicIds.includes(t.id)
+                                  ? 'border-primary bg-primary/20 text-text-primary'
+                                  : 'border-border-subtle bg-surface text-text-secondary'
+                              }`}
+                            >
+                              {topicIds.includes(t.id) ? '✓ ' : ''}{t.name}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           )}
 
           {/* Understanding level */}
           <div className="rounded-2xl bg-surface-2 border border-border-subtle p-4">
-            <p className="text-xs text-text-secondary mb-2.5">Nivel de comprensión</p>
+            <p className="text-xs text-text-secondary mb-2.5">Nivel de comprensión en clase</p>
             <div className="flex gap-2">
               {LEVELS.map(l => (
                 <button
                   key={l.v}
                   onClick={() => setUnderstanding(l.v)}
-                  className={`flex-1 py-2 rounded-xl border text-xs font-semibold transition-all ${
+                  className={`flex-1 py-2 rounded-xl border text-base transition-all ${
                     understanding === l.v
-                      ? 'border-primary bg-primary/20 text-primary'
-                      : 'border-border-subtle bg-surface text-text-secondary'
+                      ? 'border-primary bg-primary/20'
+                      : 'border-border-subtle bg-surface'
                   }`}
                 >
-                  {l.v}
+                  {l.emoji}
                 </button>
               ))}
             </div>
@@ -277,11 +300,12 @@ function PostClaseModal({ subjectsData, userId, onClose }: { subjectsData: Subje
                   <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <rect x="3" y="4" width="18" height="18" rx="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
                   </svg>
+                  <span className="text-sm text-text-secondary w-24 shrink-0">Fecha entrega</span>
                   <input
                     type="date"
                     value={dueDate}
                     onChange={e => setDueDate(e.target.value)}
-                    className="flex-1 bg-transparent text-sm text-text-primary focus:outline-none"
+                    className="flex-1 bg-transparent text-sm text-text-primary text-right focus:outline-none"
                   />
                 </div>
               </>
@@ -570,7 +594,11 @@ const MENU_OPTIONS = [
 
 // ── Main Export ───────────────────────────────────────────────────────────────
 export default function FabMenu({ subjectsData, userId }: Props) {
+  const pathname = usePathname()
   const [modal, setModal] = useState<Modal>('none')
+
+  // Hide FAB during multi-step check-in flow
+  if (pathname === '/checkin') return null
 
   function close() { setModal('none') }
 

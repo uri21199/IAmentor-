@@ -382,7 +382,7 @@ export default function CheckInPage() {
                   Agregá cada tramo de viaje (ida y vuelta separados)
                 </p>
               </div>
-              <Button variant="secondary" size="sm" onClick={addTravelSegment}>
+              <Button variant="secondary" size="sm" className="whitespace-nowrap shrink-0" onClick={addTravelSegment}>
                 + Agregar
               </Button>
             </div>
@@ -606,14 +606,13 @@ export default function CheckInPage() {
       </div>
 
       {/* Navigation */}
-      <div className="flex gap-3 mt-6">
-        {step > 0 && (
-          <Button variant="secondary" size="lg" className="flex-1" onClick={() => setStep(s => s - 1)}>
-            ← Atrás
-          </Button>
-        )}
-
-        {step < STEPS.length - 1 ? (
+      {step < STEPS.length - 1 ? (
+        <div className="flex gap-3 mt-6">
+          {step > 0 && (
+            <Button variant="secondary" size="lg" className="flex-1" onClick={() => setStep(s => s - 1)}>
+              ← Atrás
+            </Button>
+          )}
           <Button
             variant="primary"
             size="lg"
@@ -623,23 +622,26 @@ export default function CheckInPage() {
           >
             Siguiente →
           </Button>
-        ) : (
-          <div className="flex-1 space-y-2">
-            <Button
-              variant="primary"
-              size="lg"
-              className="w-full"
-              onClick={handleSubmit}
-              loading={loading}
-            >
-              Guardar y generar plan ✨
-            </Button>
-            {loading && loadingMsg && (
-              <p className="text-center text-xs text-text-secondary animate-pulse">{loadingMsg}</p>
-            )}
-          </div>
-        )}
-      </div>
+        </div>
+      ) : (
+        <div className="space-y-2 mt-6">
+          <Button
+            variant="primary"
+            size="lg"
+            className="w-full"
+            onClick={handleSubmit}
+            loading={loading}
+          >
+            Guardar y generar plan ✨
+          </Button>
+          {loading && loadingMsg && (
+            <p className="text-center text-xs text-text-secondary animate-pulse">{loadingMsg}</p>
+          )}
+          <Button variant="secondary" size="md" className="w-full" onClick={() => setStep(s => s - 1)}>
+            ← Atrás
+          </Button>
+        </div>
+      )}
     </div>
   )
 }

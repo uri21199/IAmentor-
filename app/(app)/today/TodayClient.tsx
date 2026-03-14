@@ -49,6 +49,46 @@ function blockHeight(startTime: string, endTime: string): number {
   return Math.max(28, dur * (HOUR_PX / 60))
 }
 
+// ── Column assignment for overlapping blocks ──────────────────────────────────
+function computeColumns(blocks: TimeBlockType[]): Array<TimeBlockType & { col: number; totalCols: number }> {
+  const sorted = [...blocks].sort((a, b) => a.start_time.localeCompare(b.start_time))
+  const result: Array<TimeBlockType & { col: number; totalCols: number }> = []
+  const columnEnds: string[] = []
+
+  for (const block of sorted) {
+    let assigned = -1
+    for (let i = 0; i < columnEnds.length; i++) {
+      if (columnEnds[i] <= block.start_time) {
+        assigned = i
+        columnEnds[i] = block.end_time
+        break
+      }
+    }
+    if (assigned === -1) {
+      assigned = columnEnds.length
+      columnEnds.push(block.end_time)
+    }
+    result.push({ ...block, col: assigned, totalCols: 0 })
+  }
+
+  // Set totalCols for each block based on overlapping peers
+  for (const block of result) {
+    const startMins = timeToMinutes(block.start_time)
+    const endMins   = timeToMinutes(block.end_time)
+    let maxCol = block.col
+    for (const other of result) {
+      const oStart = timeToMinutes(other.start_time)
+      const oEnd   = timeToMinutes(other.end_time)
+      if (oStart < endMins && oEnd > startMins) {
+        maxCol = Math.max(maxCol, other.col)
+      }
+    }
+    block.totalCols = maxCol + 1
+  }
+
+  return result
+}
+
 // Block color by type (using inline Tailwind for the grid view)
 const BLOCK_STYLE: Record<string, { bg: string; border: string; text: string; dot: string }> = {
   work:   { bg: 'bg-blue-500/15',    border: 'border-blue-500/30',    text: 'text-blue-300',    dot: 'bg-blue-400' },
@@ -236,6 +276,7 @@ export default function TodayClient({
 
   // ── Render ────────────────────────────────────────────────────────────────
   const displayBlocks = checkin ? blocks : previewBlocks
+  const displayBlocksWithCols = computeColumns(displayBlocks)
 
   return (
     <div className="flex flex-col max-w-lg mx-auto">
@@ -323,10 +364,10 @@ export default function TodayClient({
       )}
 
       {/* ── Hourly timeline grid ──────────────────────────────────────────────── */}
-      {displayBlocks.length > 0 && (
+      {displayBlocksWithCols.length > 0 && (
         <div
           ref={gridRef}
-          className="overflow-y-auto px-4 pb-32"
+          className="overflow-y-auto px-4 pt-3 pb-32"
           style={{ maxHeight: 'calc(100dvh - 200px)' }}
         >
           <div className="relative" style={{ height: `${(GRID_END - GRID_START) * HOUR_PX}px` }}>
@@ -370,18 +411,25 @@ export default function TodayClient({
             )}
 
             {/* Time blocks */}
-            {displayBlocks.map(block => {
+            {displayBlocksWithCols.map(block => {
               const top    = blockTop(block.start_time)
               const height = blockHeight(block.start_time, block.end_time)
               const style  = BLOCK_STYLE[block.type] ?? BLOCK_STYLE.free
               const isPreview = !checkin
+              // Column-aware positioning (left-11 = 2.75rem)
+              const leftVal  = block.totalCols > 1
+                ? `calc(2.75rem + (100% - 2.75rem) * ${block.col / block.totalCols})`
+                : '2.75rem'
+              const rightVal = block.totalCols > 1
+                ? `calc((100% - 2.75rem) * ${(block.totalCols - block.col - 1) / block.totalCols} + 1px)`
+                : '0px'
 
               return (
                 <button
                   key={block.id}
                   onClick={() => !isPreview && openEdit(block)}
-                  className={`absolute left-11 right-0 rounded-2xl border px-2.5 py-1.5 text-left transition-all active:scale-[0.98] ${style.bg} ${style.border} ${isPreview ? 'opacity-60 pointer-events-none' : ''} ${block.completed ? 'opacity-40' : ''}`}
-                  style={{ top: `${top}px`, height: `${height}px`, minHeight: '28px' }}
+                  className={`absolute rounded-2xl border px-2.5 py-1.5 text-left transition-all active:scale-[0.98] ${style.bg} ${style.border} ${isPreview ? 'opacity-60 pointer-events-none' : ''} ${block.completed ? 'opacity-40' : ''}`}
+                  style={{ top: `${top}px`, height: `${height}px`, minHeight: '28px', left: leftVal, right: rightVal }}
                 >
                   <div className="flex items-start gap-1.5 h-full overflow-hidden">
                     <div className={`w-1.5 h-1.5 rounded-full shrink-0 mt-1 ${style.dot}`} />
