@@ -174,12 +174,7 @@ export default function TodayClient({
   useEffect(() => {
     if (blocks.length > 0 || generating) return
     const controller = new AbortController()
-    setGenerating(true)
-    fetch('/api/ai/plan', { method: 'POST', signal: controller.signal })
-      .then(r => r.ok ? r.json() : Promise.reject(r))
-      .then(data => setBlocks(data.blocks))
-      .catch(err => { if (err.name !== 'AbortError') console.error(err) })
-      .finally(() => setGenerating(false))
+    consumePlanStream(controller.signal)
     return () => controller.abort()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -198,15 +193,71 @@ export default function TodayClient({
     })
   }
 
-  async function generatePlan() {
+  /** Consume SSE stream from /api/ai/plan and update blocks progressively */
+  async function consumePlanStream(signal?: AbortSignal) {
     setGenerating(true)
+    // Keep a local ref so we can merge micro_review updates correctly
+    const accumulated: TimeBlockType[] = []
+
+    const mergeAndSet = (incoming: TimeBlockType[]) => {
+      // Merge by id: newer entry wins
+      const map = new Map(accumulated.map(b => [b.id, b]))
+      for (const b of incoming) map.set(b.id, b)
+      accumulated.length = 0
+      accumulated.push(...map.values())
+      const sorted = [...accumulated].sort((a, b) => a.start_time.localeCompare(b.start_time))
+      setBlocks(sorted)
+    }
+
     try {
-      const res = await fetch('/api/ai/plan', { method: 'POST' })
-      if (!res.ok) throw new Error()
-      const data = await res.json()
-      setBlocks(data.blocks)
-    } catch (err) { console.error(err) }
-    finally { setGenerating(false) }
+      const res = await fetch('/api/ai/plan', { method: 'POST', signal })
+      if (!res.ok || !res.body) throw new Error('Stream error')
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buf += decoder.decode(value, { stream: true })
+        // SSE events are separated by double newlines
+        const parts = buf.split('\n\n')
+        buf = parts.pop() ?? ''
+
+        for (const chunk of parts) {
+          const eventMatch = chunk.match(/^event: (.+)$/m)
+          const dataMatch  = chunk.match(/^data: (.+)$/ms)
+          if (!dataMatch) continue
+          const eventName = eventMatch?.[1] ?? ''
+          const payload   = JSON.parse(dataMatch[1])
+
+          if (eventName === 'fixed_blocks') {
+            mergeAndSet(payload as TimeBlockType[])
+          } else if (eventName === 'block') {
+            mergeAndSet([payload as TimeBlockType])
+          } else if (eventName === 'update_block') {
+            // Attach micro_review (or other fields) to an existing block by id
+            const { id, ...patch } = payload as { id: string; [k: string]: unknown }
+            const updated = accumulated.map(b => b.id === id ? { ...b, ...patch } : b)
+            accumulated.length = 0
+            accumulated.push(...updated)
+            setBlocks([...updated].sort((a, b) => a.start_time.localeCompare(b.start_time)))
+          }
+          // 'done' and 'error' events are no-ops in the UI; generation indicator clears via finally
+        }
+      }
+    } catch (err: any) {
+      if (err.name !== 'AbortError') console.error('Plan stream error:', err)
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  async function generatePlan() {
+    setBlocks([])
+    await consumePlanStream()
   }
 
   async function handleReplan() {
@@ -446,7 +497,16 @@ export default function TodayClient({
       {generating && blocks.length === 0 && (
         <div className="mx-4 mb-3 rounded-3xl bg-surface-2 border border-border-subtle p-8 text-center">
           <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-          <p className="text-xs text-text-secondary">Generando tu plan...</p>
+          <p className="text-sm font-medium text-text-primary mb-1">Claude está generando tu plan...</p>
+          <p className="text-xs text-text-secondary">Los bloques aparecerán a medida que se generen</p>
+        </div>
+      )}
+
+      {/* Inline generating indicator — shown when blocks already exist but we're still streaming */}
+      {generating && blocks.length > 0 && (
+        <div className="mx-4 mb-2 flex items-center gap-2 px-3 py-2 rounded-2xl bg-primary/10 border border-primary/20">
+          <div className="w-3.5 h-3.5 border border-primary border-t-transparent rounded-full animate-spin shrink-0" />
+          <p className="text-xs text-primary font-medium">Claude está escribiendo los bloques restantes...</p>
         </div>
       )}
 
@@ -678,6 +738,29 @@ export default function TodayClient({
             </div>
 
             <div className="overflow-y-auto px-5 py-4 space-y-3">
+              {/* Micro-review card — travel blocks only */}
+              {editingBlock.type === 'travel' && editingBlock.micro_review && (
+                <div className="rounded-2xl bg-amber-500/10 border border-amber-500/25 p-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">📚</span>
+                    <p className="text-xs font-semibold text-amber-300 uppercase tracking-wide">Micro-repaso</p>
+                  </div>
+                  <p className="text-sm font-medium text-text-primary">{editingBlock.micro_review.topic}</p>
+                  <div className="space-y-1.5">
+                    {editingBlock.micro_review.pills.map((pill, i) => (
+                      <div key={i} className="flex items-start gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0 mt-1.5" />
+                        <p className="text-xs text-text-secondary leading-snug">{pill}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="rounded-xl bg-amber-500/10 border border-amber-400/20 px-3 py-2.5">
+                    <p className="text-[10px] text-amber-400 font-medium mb-1">Autoevaluación</p>
+                    <p className="text-xs text-text-primary leading-snug">{editingBlock.micro_review.self_test}</p>
+                  </div>
+                </div>
+              )}
+
               {/* Time group */}
               <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden">
                 <div className="flex items-center gap-3 px-4 py-3 border-b border-border-subtle">

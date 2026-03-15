@@ -67,6 +67,12 @@ export interface TravelSegment {
   arrival_time?: string    // "HH:MM"
 }
 
+export interface MicroReview {
+  topic: string
+  pills: string[]   // 3 quick concepts
+  self_test: string // self-evaluation question
+}
+
 export interface CheckIn {
   id: string
   user_id: string
@@ -95,10 +101,12 @@ export interface TimeBlock {
   subject_id?: string
   topic_id?: string
   travel_segment?: TravelSegment
+  micro_review?: MicroReview  // AI-generated content for travel blocks
   completed: boolean
   priority?: 'low' | 'medium' | 'high' | 'exam'
   manually_edited?: boolean  // true when user manually edited title/desc/time
   deleted?: boolean          // soft-delete: keeps time slot free, AI won't regenerate
+  _streaming?: boolean       // transient: true while block is being streamed
 }
 
 export interface DailyPlan {

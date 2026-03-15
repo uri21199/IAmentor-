@@ -2,8 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import type {
   PlanGenerationContext,
   TimeBlock,
-  StudyPriorityResult,
-  TravelSegment,
+  MicroReview,
 } from '@/types'
 import { getCurrentTimeArg, getTodayArg } from '@/lib/utils'
 
@@ -13,14 +12,14 @@ export const anthropic = new Anthropic({
   apiKey: (process.env.ANTHROPIC_API_KEY ?? '').trim(),
 })
 
-// ── Generate daily plan ───────────────────────────────────────────────────────
+// ── Internal: build the planning prompt ──────────────────────────────────────
 
-export async function generateDailyPlan(
-  context: PlanGenerationContext
-): Promise<TimeBlock[]> {
-  const { checkin, calendar_events, subjects_with_topics, study_priorities, energy_history, fixed_blocks } = context
-
-  // Argentina timezone: Vercel runs UTC, Argentina = UTC-3
+function buildPlanPrompt(
+  context: PlanGenerationContext,
+  outputFormat: 'array' | 'ndjson',
+  travelBlockIds?: string[],
+): string {
+  const { checkin, calendar_events, study_priorities, energy_history, fixed_blocks } = context
   const currentTime = getCurrentTimeArg()
 
   const travelSegments = checkin.travel_route_json
@@ -55,7 +54,30 @@ export async function generateDailyPlan(
         .join('\n')
     : '  (ninguno)'
 
-  const prompt = `Eres un mentor de productividad personal. Generá los bloques de tiempo ADICIONALES para hoy.
+  const microReviewSection = travelBlockIds && travelBlockIds.length > 0
+    ? `
+## MICRO-REPASOS PARA BLOQUES DE VIAJE
+Para cada bloque de viaje, generá una línea JSON con micro_review (ANTES de los bloques adicionales):
+{ "type": "travel_micro_review", "travel_block_id": "ID_DEL_BLOQUE", "micro_review": { "topic": "Nombre del tema", "pills": ["concepto 1", "concepto 2", "concepto 3"], "self_test": "Pregunta de autoevaluación" } }
+
+Bloques de viaje activos:
+${travelBlockIds.map((id, i) => {
+  const seg = checkin.travel_route_json[i]
+  return `  - ID: ${id}, Tramo: ${seg?.origin} → ${seg?.destination} (${seg?.duration_minutes} min)`
+}).join('\n')}
+
+Reglas para micro_review:
+- Elegí el tema con mayor priority_score o el más débil del usuario
+- pills: exactamente 3 conceptos ultra-concisos (máx 10 palabras cada uno)
+- self_test: 1 pregunta de autoevaluación corta
+`
+    : ''
+
+  const formatInstruction = outputFormat === 'ndjson'
+    ? `Respondé con UN OBJETO JSON POR LÍNEA (formato NDJSON). Primero los micro_reviews de viaje, luego los bloques adicionales. Un objeto por línea, sin arrays, sin markdown, sin explicaciones.`
+    : `Respondé ÚNICAMENTE con un JSON array de los bloques ADICIONALES. Cada bloque debe seguir el formato indicado. Sin markdown, sin explicaciones adicionales.`
+
+  return `Eres un mentor de productividad personal. Generá los bloques de tiempo ADICIONALES para hoy.
 
 ## HORA ACTUAL: ${currentTime}
 
@@ -66,11 +88,11 @@ Adaptá los horarios a la cultura argentina:
 - Cena: entre 21:00 y 22:30 (incluila si el día llega hasta esa hora)
 IMPORTANTE: NO uses horarios de EE.UU. (cena 18–19hs, almuerzo antes de las 12hs).
 
-## BLOQUES FIJOS (ya están agendados — NO los incluyas en tu respuesta)
+## BLOQUES FIJOS (ya están agendados — NO los incluyas en tu respuesta de bloques adicionales)
 ${fixedBlocksStr}
 IMPORTANTE: NO generes bloques que se superpongan con los bloques fijos. Solo generá bloques para los huecos disponibles.
 Los bloques marcados con ⚠️ EDITADO MANUALMENTE fueron modificados por el usuario y NO deben reemplazarse ni modificarse bajo ninguna circunstancia.
-
+${microReviewSection}
 ## DATOS DEL CHECK-IN
 - Calidad de sueño: ${checkin.sleep_quality}/5
 - Nivel de energía: ${checkin.energy_level}/5
@@ -102,8 +124,7 @@ ${energyTrend}
 8. NO repitas los bloques fijos ya indicados arriba
 9. BLOQUES DE TRABAJO: el bloque de trabajo debe ser UN ÚNICO BLOQUE continuo que cubre el horario completo de trabajo. NO incluyas pausas ni descansos dentro del horario laboral. La ÚNICA excepción es si hay un bloque de VIAJE que cae dentro del horario de trabajo — en ese caso dividí el trabajo en dos bloques (antes y después del viaje).
 
-## FORMATO DE RESPUESTA
-Respondé ÚNICAMENTE con un JSON array de los bloques ADICIONALES. Cada bloque:
+## FORMATO DE CADA BLOQUE ADICIONAL
 {
   "id": "block_1",
   "start_time": "HH:MM",
@@ -115,7 +136,15 @@ Respondé ÚNICAMENTE con un JSON array de los bloques ADICIONALES. Cada bloque:
   "priority": "low|medium|high|exam"
 }
 
-Generá el JSON array directamente, sin markdown, sin explicaciones adicionales.`
+${formatInstruction}`
+}
+
+// ── Generate daily plan (non-streaming, legacy) ───────────────────────────────
+
+export async function generateDailyPlan(
+  context: PlanGenerationContext
+): Promise<TimeBlock[]> {
+  const prompt = buildPlanPrompt(context, 'array')
 
   const message = await anthropic.messages.create({
     model: 'claude-sonnet-4-5',
@@ -135,6 +164,80 @@ Generá el JSON array directamente, sin markdown, sin explicaciones adicionales.
       return JSON.parse(jsonMatch[0])
     }
     throw new Error('Failed to parse plan from AI response')
+  }
+}
+
+// ── Generate daily plan (streaming / NDJSON) ──────────────────────────────────
+
+/** Internal shape for micro_review events emitted by Claude */
+interface TravelMicroReviewEvent {
+  type: 'travel_micro_review'
+  travel_block_id: string
+  micro_review: MicroReview
+}
+
+/**
+ * Streams plan blocks as an async generator.
+ * Yields TimeBlock objects for regular blocks.
+ * Yields TravelMicroReviewEvent objects for travel micro-reviews.
+ *
+ * @param context - Plan generation context
+ * @param travelBlockIds - IDs of deterministic travel blocks that need micro_reviews
+ */
+export async function* generateDailyPlanStream(
+  context: PlanGenerationContext,
+  travelBlockIds: string[] = [],
+): AsyncGenerator<TimeBlock | TravelMicroReviewEvent> {
+  const prompt = buildPlanPrompt(context, 'ndjson', travelBlockIds)
+
+  const stream = anthropic.messages.stream({
+    model: 'claude-sonnet-4-5',
+    max_tokens: 2048,
+    messages: [{ role: 'user', content: prompt }],
+  })
+
+  let buffer = ''
+
+  for await (const event of stream) {
+    if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+      buffer += event.delta.text
+
+      // Split on newlines: each complete line may be a JSON object
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? '' // Keep incomplete last line in buffer
+
+      for (const line of lines) {
+        const parsed = tryParseJsonLine(line)
+        if (parsed) yield parsed
+      }
+    }
+  }
+
+  // Process any remaining content in the buffer
+  if (buffer.trim()) {
+    // Could be a trailing complete object or a JSON array fallback
+    const trimmed = buffer.trim()
+    if (trimmed.startsWith('[')) {
+      try {
+        const arr = JSON.parse(trimmed)
+        for (const item of arr) if (item && typeof item === 'object') yield item
+      } catch { /* ignore */ }
+    } else {
+      const parsed = tryParseJsonLine(trimmed)
+      if (parsed) yield parsed
+    }
+  }
+}
+
+/** Parse a single line as JSON, removing surrounding array syntax and trailing commas */
+function tryParseJsonLine(line: string): TimeBlock | TravelMicroReviewEvent | null {
+  const trimmed = line.trim().replace(/^,|,$/, '').trim()
+  if (!trimmed || trimmed === '[' || trimmed === ']') return null
+  if (!trimmed.startsWith('{')) return null
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    return null
   }
 }
 

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
@@ -11,6 +11,47 @@ import { Card } from '@/components/ui/Card'
 import type { StressLevel, WorkMode, CheckInFormData, TravelSegment } from '@/types'
 
 const ALL_STEPS = ['Estado', 'Trabajo', 'Facultad', 'Viaje', 'Resumen']
+
+// ── Draft persistence helpers ─────────────────────────────────────────────────
+
+const DRAFT_KEY = 'checkin_draft'
+
+interface CheckInDraft {
+  step: number
+  data: CheckInFormData
+  createdAt: string // ISO date string
+}
+
+function getTodayISO(): string {
+  return format(new Date(), 'yyyy-MM-dd')
+}
+
+function saveDraft(step: number, data: CheckInFormData): void {
+  try {
+    const draft: CheckInDraft = { step, data, createdAt: getTodayISO() }
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft))
+  } catch { /* localStorage may be unavailable */ }
+}
+
+function loadDraft(): CheckInDraft | null {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY)
+    if (!raw) return null
+    const draft: CheckInDraft = JSON.parse(raw)
+    // TTL: draft only valid for today
+    if (draft.createdAt !== getTodayISO()) {
+      localStorage.removeItem(DRAFT_KEY)
+      return null
+    }
+    return draft
+  } catch {
+    return null
+  }
+}
+
+function clearDraft(): void {
+  try { localStorage.removeItem(DRAFT_KEY) } catch { /* ignore */ }
+}
 
 const LOCATION_CHIPS = ['Casa', 'Trabajo', 'Facultad']
 
@@ -32,6 +73,9 @@ export default function CheckInPage() {
   const [checking, setChecking] = useState(true)
   const [isEmployed, setIsEmployed] = useState<boolean | null>(null)
   const [subjects, setSubjects] = useState<{ id: string; name: string }[]>([])
+  const [draftFound, setDraftFound] = useState(false)
+  // Track whether this is the initial mount to suppress auto-save before hydration
+  const isMounted = useRef(false)
 
   // Active steps: skip "Trabajo" if user is not employed
   const STEPS = isEmployed === false
@@ -114,12 +158,27 @@ export default function CheckInPage() {
           .eq('user_id', user.id)
           .order('name')
         if (subjectsData) setSubjects(subjectsData)
+
+        // Restore draft if valid (after user config pre-fill, so draft takes precedence)
+        const draft = loadDraft()
+        if (draft) {
+          setForm(draft.data)
+          setStep(draft.step)
+          setDraftFound(true)
+        }
       } finally {
         setChecking(false)
+        isMounted.current = true
       }
     }
     check()
   }, [])
+
+  // ── Auto-save draft on every step/form change ─────────────────────────────
+  useEffect(() => {
+    if (!isMounted.current) return
+    saveDraft(step, form)
+  }, [step, form])
 
   function addTravelSegment() {
     setForm(f => ({
@@ -170,21 +229,13 @@ export default function CheckInPage() {
       })
       if (error) throw error
 
-      // Auto-generate plan with AI after check-in is saved
-      setLoadingMsg('Generando plan con IA ✨')
-      try {
-        const planRes = await fetch('/api/ai/plan', { method: 'POST' })
-        if (!planRes.ok) {
-          const planErrBody = await planRes.json().catch(() => ({}))
-          console.error('Plan generation failed:', planRes.status, planErrBody)
-        }
-      } catch (planErr) {
-        console.error('Plan generation network error:', planErr)
-      }
+      // Clear draft — check-in is saved successfully
+      clearDraft()
 
-      // Evaluate smart deadline alerts (fire-and-forget — don't block navigation)
+      // Evaluate smart deadline alerts (fire-and-forget)
       fetch('/api/notifications').catch(() => {})
 
+      // Navigate to /today immediately — the plan will be streamed progressively there
       router.push('/today')
     } catch (err) {
       console.error(err)
@@ -239,6 +290,32 @@ export default function CheckInPage() {
         </span>
         <h1 className="text-xl font-bold text-text-primary mt-2">Check-in matutino</h1>
       </div>
+
+      {/* Draft restored banner */}
+      {draftFound && (
+        <div className="mb-4 flex items-center gap-3 px-4 py-3 rounded-2xl bg-primary/10 border border-primary/25">
+          <span className="text-lg shrink-0">💾</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-text-primary">Continuando donde lo dejaste</p>
+            <p className="text-xs text-text-secondary">Tu borrador fue guardado automáticamente</p>
+          </div>
+          <button
+            onClick={() => {
+              clearDraft()
+              setStep(0)
+              setForm({
+                sleep_quality: 3, energy_level: 3, stress_level: 'low',
+                work_mode: 'remoto', has_faculty: false, faculty_mode: null,
+                faculty_subject: null, travel_route: [], unexpected_events: '',
+              })
+              setDraftFound(false)
+            }}
+            className="text-xs text-text-secondary underline shrink-0"
+          >
+            Empezar de cero
+          </button>
+        </div>
+      )}
 
       {/* Progress — numbered step pills */}
       <div className="flex items-center gap-1.5 mb-6">
@@ -676,11 +753,8 @@ export default function CheckInPage() {
             onClick={handleSubmit}
             loading={loading}
           >
-            Guardar y generar plan ✨
+            {loading ? loadingMsg || 'Guardando...' : 'Guardar y generar plan ✨'}
           </Button>
-          {loading && loadingMsg && (
-            <p className="text-center text-xs text-text-secondary animate-pulse">{loadingMsg}</p>
-          )}
           <Button variant="secondary" size="md" className="w-full" onClick={() => setStep(s => s - 1)}>
             ← Atrás
           </Button>
