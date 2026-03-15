@@ -1,6 +1,6 @@
 'use client'
 
-import { format, parseISO, differenceInDays, isToday, isTomorrow } from 'date-fns'
+import { format, parseISO, differenceInDays, isToday, isTomorrow, startOfDay } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { getDaysColor } from '@/lib/study-priority'
 import { Badge } from '@/components/ui/Badge'
@@ -81,7 +81,7 @@ export default function AgendaClient({ events, today }: Props) {
     <div className="space-y-5">
       {dates.map((date, di) => {
         const dayEvents = grouped[date]
-        const days = differenceInDays(parseISO(date), new Date())
+        const days = differenceInDays(parseISO(date), startOfDay(new Date()))
         const isDateToday = date === today
 
         return (

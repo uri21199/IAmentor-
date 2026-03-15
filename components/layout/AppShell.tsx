@@ -3,7 +3,6 @@
 import { useState } from 'react'
 import { usePathname } from 'next/navigation'
 import SideDrawer from './SideDrawer'
-import NotificationCenter from '@/components/features/NotificationCenter'
 
 const PAGE_TITLES: Record<string, string> = {
   '/today':          'Hoy',
@@ -26,8 +25,7 @@ interface AppShellProps {
 }
 
 export default function AppShell({ children, userEmail }: AppShellProps) {
-  const [drawerOpen, setDrawerOpen]           = useState(false)
-  const [notifUnreadCount, setNotifUnreadCount] = useState(0)
+  const [drawerOpen, setDrawerOpen] = useState(false)
   const pathname = usePathname()
 
   const title = Object.entries(PAGE_TITLES).find(([k]) =>
@@ -40,7 +38,7 @@ export default function AppShell({ children, userEmail }: AppShellProps) {
         isOpen={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         userEmail={userEmail}
-        notificationUnreadCount={notifUnreadCount}
+        notificationUnreadCount={0}
       />
 
       {/* Top bar */}
@@ -56,7 +54,7 @@ export default function AppShell({ children, userEmail }: AppShellProps) {
             </svg>
           </button>
           <h1 className="flex-1 text-base font-semibold text-text-primary">{title}</h1>
-          <NotificationCenter onUnreadCountChange={setNotifUnreadCount} />
+
         </div>
       </header>
 

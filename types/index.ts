@@ -393,6 +393,66 @@ export interface DeadlineAlertContext {
 }
 
 // ============================================================
+// FEATURE 4: HALLUCINATION DETECTION TYPES
+// ============================================================
+
+export interface TopicCompletion {
+  id: string
+  user_id: string
+  topic_id: string
+  subject_id: string
+  topic_name: string
+  completed_at: string
+  challenge_question: string | null
+  challenge_options: string[] | null
+  challenge_correct_index: number | null
+  challenge_user_answer: string | null
+  challenge_result: 'passed' | 'failed' | 'skipped' | null
+  created_at: string
+}
+
+/** Returned by /api/topics/complete when hallucination threshold is exceeded */
+export interface HallucinationChallenge {
+  completion_id: string
+  topic_id: string
+  topic_name: string
+  question: string
+  options: string[]   // 4 options; correct_index is kept server-side
+}
+
+// ============================================================
+// FEATURE 5: PROGRESS SNAPSHOT TYPES
+// ============================================================
+
+export interface ProgressSnapshot {
+  id: string
+  user_id: string
+  subject_id: string
+  snapshot_date: string   // "YYYY-MM-DD"
+  health_score: number    // 0–1
+  topics_json: Array<{ id: string; status: TopicStatus }>
+  created_at: string
+}
+
+/** Aggregated weekly health per subject — used by DomainHeatmap */
+export interface WeeklySubjectHealth {
+  subject_id: string
+  subject_name: string
+  subject_color: string
+  /** ISO week key e.g. "2026-W12" */
+  week: string
+  /** Human label e.g. "Mar 9" (Monday of that week) */
+  week_label: string
+  /** 0–1 average health score; null = no data that week */
+  average_score: number | null
+  /** True if there was at least one activity entry that week */
+  has_activity: boolean
+}
+
+/** Re-exported from lib/study-priority for convenient importing */
+export type StudyMode = 'exam_prep' | 'active_review' | 'normal' | 'light'
+
+// ============================================================
 // POMODORO TYPES
 // ============================================================
 

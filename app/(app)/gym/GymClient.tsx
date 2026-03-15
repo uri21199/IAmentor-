@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/Badge'
 import Button from '@/components/ui/Button'
 import { getWorkoutPlan, getNextWorkoutType } from '@/lib/exercises'
 import { workoutTypeLabel, workoutTypeIcon, formatMinutes } from '@/lib/utils'
-import type { WorkoutType, Exercise } from '@/types'
+import type { WorkoutType, Exercise, StudyMode } from '@/types'
 
 interface Props {
   energyLevel: number
@@ -19,6 +19,7 @@ interface Props {
   workoutDays: Set<string>
   today: string
   userId: string
+  studyMode?: StudyMode | null
 }
 
 const ENERGY_LABEL = ['', '🪫 Muy baja', '😮‍💨 Baja', '⚡ Normal', '🔥 Alta', '🚀 Máxima']
@@ -39,6 +40,7 @@ export default function GymClient({
   workoutDays,
   today,
   userId,
+  studyMode,
 }: Props) {
   const supabase = createClient()
   const [saving, setSaving] = useState(false)
@@ -57,7 +59,7 @@ export default function GymClient({
     : getNextWorkoutType(recentWorkouts)
 
   const lastPerceivedEffort = recentWorkouts[0]?.perceived_effort || null
-  const plan = getWorkoutPlan(nextType, energyLevel, weekNumber, lastPerceivedEffort)
+  const plan = getWorkoutPlan(nextType, energyLevel, weekNumber, lastPerceivedEffort, studyMode)
 
   // Consistency stats
   const totalWorkouts = recentWorkouts.filter(w => w.completed).length
@@ -126,6 +128,31 @@ export default function GymClient({
           </div>
         </div>
       </Card>
+
+      {/* Feature 6: Cognitive load notice for exam / active-review weeks */}
+      {(studyMode === 'exam_prep' || studyMode === 'active_review') && !workoutDone && (
+        <div className={`flex items-start gap-3 p-4 rounded-2xl border ${
+          studyMode === 'exam_prep'
+            ? 'bg-amber-500/10 border-amber-500/30'
+            : 'bg-blue-500/10 border-blue-500/20'
+        }`}>
+          <span className="text-2xl shrink-0">{studyMode === 'exam_prep' ? '🧠' : '📖'}</span>
+          <div>
+            <p className={`text-sm font-semibold mb-0.5 ${
+              studyMode === 'exam_prep' ? 'text-amber-400' : 'text-primary'
+            }`}>
+              {studyMode === 'exam_prep'
+                ? 'Semana de parciales detectada'
+                : 'Semana de repaso activo'}
+            </p>
+            <p className="text-xs text-text-secondary leading-relaxed">
+              {studyMode === 'exam_prep'
+                ? 'Hoy priorizamos recuperación para mantener tu rendimiento mental. Se recomienda movilidad en lugar de entrenamiento intenso.'
+                : 'Tenés un parcial próximo. Una sesión moderada te permite estudiar sin fatiga extra.'}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Today's workout card */}
       {workoutDone ? (

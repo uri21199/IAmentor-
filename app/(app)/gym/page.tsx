@@ -1,7 +1,8 @@
 import { createServerSupabaseClient } from '@/lib/supabase-server'
 import { redirect } from 'next/navigation'
-import { format } from 'date-fns'
+import { format, addDays } from 'date-fns'
 import GymClient from './GymClient'
+import { determineStudyMode, type StudyMode } from '@/lib/study-priority'
 
 export default async function GymPage() {
   const supabase = createServerSupabaseClient()
@@ -43,6 +44,30 @@ export default async function GymPage() {
 
   const workoutDays = new Set((recentWorkouts || []).map(w => w.date))
 
+  // ── Feature 6: Determine study_mode from upcoming academic events ──────────
+  // Fetch events in the next 14 days to detect exam / review windows
+  const in14Days = format(addDays(new Date(), 14), 'yyyy-MM-dd')
+  const { data: upcomingEvents } = await supabase
+    .from('academic_events')
+    .select('type, date')
+    .eq('user_id', user.id)
+    .gte('date', today)
+    .lte('date', in14Days)
+    .order('date', { ascending: true })
+
+  // Use the same determineStudyMode logic as study-priority.ts
+  let studyMode: StudyMode | null = null
+  if (upcomingEvents && upcomingEvents.length > 0) {
+    const now = new Date()
+    let minDays = Infinity
+    for (const ev of upcomingEvents) {
+      const evDate = new Date(ev.date + 'T00:00:00')
+      const days = Math.ceil((evDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+      if (days < minDays) minDays = days
+    }
+    studyMode = determineStudyMode(minDays)
+  }
+
   return (
     <GymClient
       energyLevel={checkin?.energy_level || 3}
@@ -52,6 +77,7 @@ export default async function GymPage() {
       workoutDays={workoutDays}
       today={today}
       userId={user.id}
+      studyMode={studyMode}
     />
   )
 }

@@ -90,12 +90,28 @@ export async function fetchExercisesFromAPI(
 
 // ── Main function ─────────────────────────────────────────────────────────────
 
+export type WorkoutStudyMode = 'exam_prep' | 'active_review' | 'normal' | 'light' | null
+
 export function getWorkoutPlan(
   type: WorkoutType,
   energyLevel: number,
   weekNumber: number,
-  lastPerceivedEffort?: string | null
-): { exercises: Exercise[]; duration_minutes: number; description: string; coachTip: string } {
+  lastPerceivedEffort?: string | null,
+  studyMode?: WorkoutStudyMode
+): { exercises: Exercise[]; duration_minutes: number; description: string; coachTip: string; cognitiveLoadOverride: boolean } {
+  // ── Feature 6: Cognitive load override ──────────────────────────────────────
+  // If the user is in exam prep mode, force a mobility/active-recovery session
+  // regardless of energy level to protect cognitive performance.
+  if (studyMode === 'exam_prep') {
+    return {
+      exercises: LOCAL_EXERCISES.movilidad,
+      duration_minutes: 20,
+      description: 'Recuperación activa. Semana de parciales detectada.',
+      coachTip: 'Semana de parciales detectada. Hoy priorizamos recuperación para mantener tu rendimiento mental.',
+      cognitiveLoadOverride: true,
+    }
+  }
+
   const base = LOCAL_EXERCISES[type]
 
   // Progressive overload: increase sets/reps based on week
@@ -120,10 +136,18 @@ export function getWorkoutPlan(
     coachTip = 'Hoy priorizá la técnica sobre el volumen — construye la base para las sesiones intensas.'
   } else {
     // High energy: full session
-    exercises = base
-    duration = type === 'movilidad' ? 20 : 50
-    description = 'Sesión completa. Progresión semana ' + weekNumber + '.'
-    coachTip = 'Excelente energía — aprovechá para superar tu marca de la semana pasada.'
+    // active_review mode: cap at maintenance to preserve energy for study
+    if (studyMode === 'active_review') {
+      exercises = base.slice(0, 4)
+      duration = 35
+      description = 'Sesión de mantenimiento. Tenés un parcial próximo, conservá energía.'
+      coachTip = 'Con un examen cerca, una sesión moderada es suficiente — reservá energía mental para el estudio.'
+    } else {
+      exercises = base
+      duration = type === 'movilidad' ? 20 : 50
+      description = 'Sesión completa. Progresión semana ' + weekNumber + '.'
+      coachTip = 'Excelente energía — aprovechá para superar tu marca de la semana pasada.'
+    }
   }
 
   // Adjust based on last perceived effort
@@ -150,7 +174,7 @@ export function getWorkoutPlan(
   }
   // 'good' or null: maintain current plan (coachTip already set above)
 
-  return { exercises, duration_minutes: duration, description, coachTip }
+  return { exercises, duration_minutes: duration, description, coachTip, cognitiveLoadOverride: false }
 }
 
 export function getNextWorkoutType(

@@ -83,6 +83,37 @@ export default async function StatsPage() {
     })
   }
 
+  // ── Feature 5: Upsert today's progress snapshot server-side ──────────────
+  // Fire-and-forget: runs in parallel with the rest of the page data fetches.
+  // The DomainHeatmap component will also trigger this on mount, so this is
+  // just an optimistic pre-fetch to ensure data is fresh on first render.
+  if (semester) {
+    const { data: subjectsForSnapshot } = await supabase
+      .from('subjects')
+      .select(`id, units ( topics ( id, status ) )`)
+      .eq('semester_id', semester.id)
+
+    if (subjectsForSnapshot) {
+      const snapshotRows = subjectsForSnapshot.map((s: any) => {
+        const topics = (s.units ?? []).flatMap((u: any) => u.topics ?? [])
+        const total = topics.length
+        const green = topics.filter((t: any) => t.status === 'green').length
+        return {
+          user_id: user.id,
+          subject_id: s.id,
+          snapshot_date: today,
+          health_score: total > 0 ? parseFloat((green / total).toFixed(4)) : 0,
+          topics_json: topics.map((t: any) => ({ id: t.id, status: t.status })),
+        }
+      })
+      if (snapshotRows.length > 0) {
+        await supabase
+          .from('progress_snapshots')
+          .upsert(snapshotRows, { onConflict: 'user_id,subject_id,snapshot_date' })
+      }
+    }
+  }
+
   // Calculate travel study ratio
   const travelRatio = (() => {
     let totalSegments = 0

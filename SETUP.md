@@ -145,6 +145,7 @@ Ejecutar cada migración en SQL Editor en este orden exacto:
 | `supabase/migrations_v7.sql` | Tabla `pomodoro_sessions` (v1) |
 | `supabase/migrations_v8.sql` | Tabla `pomodoro_sessions` (versión actualizada) |
 | `supabase/migrations_v9.sql` | Smart deadline alerts: columnas `event_id`, `subject_id`, `trigger_days_before`, `title`, `body`, `context_json`, `push_sent`, `target_path` en `notifications` + nuevo UNIQUE constraint |
+| `supabase/migrations_features456.sql` | **Features 4-5-6:** tablas `topic_completions` (detección de alucinación) y `progress_snapshots` (heatmap de dominio) con RLS e índices |
 
 ```sql
 -- Verificar tablas tras todas las migraciones:
@@ -154,8 +155,9 @@ ORDER BY table_name;
 
 -- Debe incluir: academic_events, checkins, class_logs, class_schedule,
 --               daily_plans, notifications, pomodoro_sessions, profiles,
---               push_subscriptions, semesters, subjects, topics,
---               travel_logs, units, user_config, user_integrations, workouts
+--               progress_snapshots, push_subscriptions, semesters, subjects,
+--               topic_completions, topics, travel_logs, units,
+--               user_config, user_integrations, workouts
 ```
 
 ### 4.4 Configurar Auth
@@ -630,6 +632,37 @@ Solución: hacer un nuevo check-in incluyendo la ruta de viaje en el Paso 4.
 
 ---
 
+### El heatmap de dominio no muestra datos
+
+El heatmap necesita al menos un snapshot en `progress_snapshots`. Se crea automáticamente al visitar `/stats`, pero si la tabla no existe la UI muestra "Sin datos disponibles".
+
+Verificar:
+1. Ejecutar `supabase/migrations_features456.sql` en Supabase SQL Editor
+2. Visitar `/stats` — el Server Component hace upsert automático
+3. Si la tabla existe pero sigue vacío, ir a `/stats` y hacer clic en "↻ actualizar" en la tarjeta del heatmap
+
+---
+
+### El desafío de alucinación de progreso no aparece
+
+La detección requiere la tabla `topic_completions`. Si la tabla no existe, el endpoint devuelve 500 y el error se silencia en el cliente (la UI no bloquea el flujo).
+
+Verificar:
+1. Ejecutar `supabase/migrations_features456.sql`
+2. Reproducir el trigger: marcar > 3 temas como verdes en menos de 2 horas
+
+---
+
+### La pantalla de gym no muestra el banner de "Semana de parciales"
+
+El banner solo aparece si hay `academic_events` con `type` en `('parcial', 'parcial_intermedio', 'entrega_tp')` en los próximos 14 días para el usuario.
+
+Verificar:
+1. Ir a una materia → agregar un parcial con fecha dentro de los próximos 7 días
+2. Recargar `/gym` — el Server Component recalcula `studyMode` en cada request
+
+---
+
 ### El build de Vercel falla con errores de TypeScript o ESLint
 El `next.config.js` tiene ambas opciones desactivadas durante el build. Verificar que sigue presente:
 ```javascript
@@ -671,10 +704,11 @@ Ambos formatos funcionan — solo asegurarse de copiar la key completa sin espac
 | `supabase/migrations_v7.sql` | `pomodoro_sessions` (v1) |
 | `supabase/migrations_v8.sql` | `pomodoro_sessions` (versión actualizada) |
 | `supabase/migrations_v9.sql` | Smart deadline alerts en `notifications` |
+| `supabase/migrations_features456.sql` | `topic_completions` + `progress_snapshots` (Features 4, 5, 6) |
 | `lib/anthropic.ts` | Funciones `generateDailyPlan()`, `replanDay()`, `generateWeeklyInsight()` |
 | `lib/study-priority.ts` | Algoritmo puro de priorización (sin DB, testeable) |
 | `lib/notifications-engine.ts` | Motor puro de triggers de notificaciones (sin DB, testeable) |
-| `lib/exercises.ts` | Base de 48 ejercicios + `getWorkoutPlan()` + `getNextWorkoutType()` |
+| `lib/exercises.ts` | 48 ejercicios + `getWorkoutPlan(type, energy, week, effort, studyMode?)` + `getNextWorkoutType()` |
 | `lib/google-calendar.ts` | OAuth + fetch de eventos + refresh automático de token |
 | `public/push-sw.js` | Service Worker para push notifications |
 | `public/manifest.json` | PWA manifest (name, icons, display, theme_color) |

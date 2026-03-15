@@ -27,6 +27,9 @@
 16. [Limitaciones conocidas y deuda técnica](#16-limitaciones-conocidas-y-deuda-técnica)
 17. [Oportunidades de mejora](#17-oportunidades-de-mejora)
 18. [Escalabilidad](#18-escalabilidad)
+19. [Detección de Alucinación de Progreso](#19-detección-de-alucinación-de-progreso)
+20. [Heatmap de Dominio Académico](#20-heatmap-de-dominio-académico)
+21. [Ajuste por Carga Cognitiva](#21-ajuste-por-carga-cognitiva)
 
 ---
 
@@ -69,6 +72,9 @@ La app mantiene una jerarquía académica completa (cuatrimestre → materia →
 | **Estadísticas** | Completion %, energía por día, dominio por materia, workouts semanales. Charts con Recharts. |
 | **Insight semanal IA** | Claude genera 3 oraciones: patrón positivo, área a mejorar, recomendación concreta. |
 | **Pomodoro** | Componente `PomodoroFocus.tsx` incluido. |
+| **Detección de Alucinación de Progreso** | Detecta si el usuario marca > 3 temas como dominados en < 2 horas y activa una micro-validación cognitiva generada por Claude Haiku. Si falla → revierte el tema a `yellow`. |
+| **Heatmap de Dominio Académico** | CSS-grid heatmap en la pantalla de Stats: filas = materias, columnas = semanas (8 semanas). Verde = dominado, amber = progreso, rojo = débil. Alerta automática si una materia lleva > 7 días sin actividad. |
+| **Ajuste por Carga Cognitiva** | `getWorkoutPlan()` detecta el `study_mode` activo (exam_prep / active_review). En semana de parciales fuerza movilidad (20 min) aunque la energía sea alta. Banner contextual en la pantalla de Gym. |
 | **PWA** | Service Worker (next-pwa), manifest, instalable en Android e iOS vía Safari. |
 | **Settings** | Google Calendar, push notifications toggle, info de la app. |
 | **Configuración** | CRUD de cuatrimestres, horario de clases semanal, horario y modalidad de trabajo. |
@@ -283,6 +289,11 @@ IAmentor/
 │       │   └── events/route.ts         GET: eventos del día con refresh automático
 │       ├── plan/
 │       │   └── update-block/route.ts   PATCH: guarda plan completo + recalcula completion %
+│       ├── topics/
+│       │   ├── complete/route.ts       POST: registra completación + detecta alucinación → desafío MCQ
+│       │   └── validate/route.ts       POST: valida respuesta server-side → pasa/falla + revierte status
+│       ├── progress/
+│       │   └── snapshot/route.ts       POST: upsert snapshot diario · GET: grid semanal para heatmap
 │       ├── notifications/
 │       │   ├── route.ts                GET: evalúa triggers + persiste + retorna no leídas
 │       │   └── [id]/route.ts           PATCH: marcar como leída + retorna target_path
@@ -304,7 +315,9 @@ IAmentor/
 │   │   ├── FabMenu.tsx                 FAB global: post-clase, add evento, replan
 │   │   ├── PomodoroFocus.tsx           Timer Pomodoro
 │   │   ├── NotificationCenter.tsx      Dropdown/panel de notificaciones (campanita)
-│   │   └── NotificationBanner.tsx      Banner de notificación inline en la pantalla
+│   │   ├── NotificationBanner.tsx      Banner de notificación inline en la pantalla
+│   │   ├── ProgressHallucinationGuard.tsx  Modal de micro-validación cognitiva (MCQ)
+│   │   └── DomainHeatmap.tsx           CSS-grid heatmap de dominio por semana/materia
 │   └── layout/
 │       ├── BottomNav.tsx               Nav fija inferior (today/subjects/gym/stats/settings)
 │       ├── SideDrawer.tsx              Menú lateral deslizable
@@ -337,7 +350,8 @@ IAmentor/
 │   ├── migrations_v6.sql               push_subscriptions, user_config.is_employed, dedup
 │   ├── migrations_v7.sql               pomodoro_sessions
 │   ├── migrations_v8.sql               pomodoro_sessions (versión actualizada)
-│   └── migrations_v9.sql               Smart deadline alerts: event_id, trigger_days_before, etc.
+│   ├── migrations_v9.sql               Smart deadline alerts: event_id, trigger_days_before, etc.
+│   └── migrations_features456.sql      topic_completions + progress_snapshots (features 4-5-6)
 │
 ├── scripts/
 │   └── db-reset.ts                     Hard reset de todas las tablas (irreversible)
@@ -416,7 +430,14 @@ auth.users  ← Supabase gestionado
     │
     ├─── travel_logs    date (UNIQUE/user), segments_json[], studied_during_json[]
     │
-    └─── pomodoro_sessions  start_time, end_time, topic_id, subject_id, completed
+    ├─── pomodoro_sessions  start_time, end_time, topic_id, subject_id, completed
+    │
+    ├─── topic_completions  topic_id, subject_id, topic_name, completed_at,    [Feature 4]
+    │                       challenge_question, challenge_options (JSONB),
+    │                       challenge_correct_index (server-side), challenge_result
+    │
+    └─── progress_snapshots subject_id, snapshot_date (UNIQUE/user+subject+date), [Feature 5]
+                            health_score (0.0–1.0), topics_json [{id, status}]
 ```
 
 ### RLS — patrón aplicado en todas las tablas
@@ -537,6 +558,33 @@ Registra o elimina una suscripción push del dispositivo.
 Envía push notification (llamada interna, requiere `INTERNAL_SECRET`).
 
 - **Body:** `{ userId: string, notificationIds: string[] }`
+
+### `POST /api/topics/complete` *(Feature 4)*
+Registra cuando un tema es marcado como dominado (verde) y verifica si se superó el umbral de alucinación.
+
+- **Body:** `{ topic_id, subject_id, topic_name }`
+- **Lógica:** cuenta completaciones sin desafío en la ventana de 2 horas. Si `count > 3`, genera un desafío MCQ con Claude Haiku y lo persiste en `topic_completions`.
+- **Response:** `{ needs_validation: false }` o `{ needs_validation: true, challenge: HallucinationChallenge }`
+
+### `POST /api/topics/validate` *(Feature 4)*
+Valida la respuesta del usuario al desafío cognitivo.
+
+- **Body:** `{ completion_id, topic_id, selected_index, skipped? }`
+- **Lógica:** recupera `challenge_correct_index` de la DB (nunca viaja al cliente). Si falla → actualiza el tema a `'yellow'` en la tabla `topics`.
+- **Response:** `{ passed: boolean, new_status: 'green' | 'yellow' }`
+
+### `POST /api/progress/snapshot` *(Feature 5)*
+Upsert del snapshot diario de salud académica para todas las materias del semestre activo.
+
+- **Body:** ninguno (calcula desde el estado actual de `topics`)
+- **Response:** `{ ok: true, snapshots_created: number }`
+- **Idempotente:** usa `UNIQUE(user_id, subject_id, snapshot_date)` — seguro llamarlo múltiples veces.
+
+### `GET /api/progress/snapshot?days=56` *(Feature 5)*
+Devuelve el grid agregado por semana para el heatmap.
+
+- **Query:** `days` (default 56 = 8 semanas)
+- **Response:** `{ subjects[], weeks[], labels[], grid: Record<subject_id, Record<week_key, number|null>>, inactive_subjects[] }`
 
 ---
 
@@ -798,11 +846,32 @@ empuje → jale → piernas → cardio → movilidad → empuje → ...
 ### Adaptación por energía
 
 ```typescript
-getWorkoutPlan(type, energyLevel, weekNumber, lastPerceivedEffort):
+getWorkoutPlan(type, energyLevel, weekNumber, lastPerceivedEffort, studyMode?):
   energyLevel ≤ 2  → movilidad (independiente del tipo)
   energyLevel 3    → maintenance (80% del volumen base)
   energyLevel 4-5  → sesión completa
 ```
+
+### Ajuste por carga cognitiva *(Feature 6)*
+
+```typescript
+// studyMode se calcula desde los próximos academic_events del usuario
+// en gym/page.tsx → determineStudyMode(minDaysToEvent)
+
+studyMode === 'exam_prep':
+  → fuerza movilidad 20 min sin importar energía ni tipo
+  → cognitiveLoadOverride: true
+  → banner: "Semana de parciales detectada. Hoy priorizamos recuperación..."
+
+studyMode === 'active_review':
+  → si energyLevel ≥ 4: capea a maintenance en lugar de sesión completa
+  → banner informativo: "Tenés un parcial próximo..."
+
+studyMode === 'normal' | 'light' | null:
+  → comportamiento original por energía
+```
+
+El campo `cognitiveLoadOverride: boolean` en el return indica si el plan fue modificado por esta lógica.
 
 ### Sobrecarga progresiva
 
@@ -968,8 +1037,9 @@ TIPOGRAFÍA
 | Parsing PDF con IA | ✅ Funcional | Sube programa → temas. Sube calendario → fechas. |
 | Notificaciones | ✅ Funcional | Motor puro. 7 tipos. Dedup. Push VAPID. |
 | Google Calendar | ✅ Funcional | OAuth2 completo. Token refresh automático. |
-| Gym tracker | ✅ Funcional | Rotación + sobrecarga progresiva + energía adaptativa. |
-| Estadísticas | ✅ Funcional | Charts recharts. Insight semanal IA. |
+| Gym tracker | ✅ Funcional | Rotación + sobrecarga progresiva + energía adaptativa + ajuste por carga cognitiva (Feature 6). |
+| Estadísticas | ✅ Funcional | Charts recharts. Insight semanal IA. Heatmap de dominio por semana (Feature 5). |
+| Detección de Alucinación | ✅ Funcional | Ventana 2h, umbral 3 temas, MCQ con Claude Haiku, reversión a yellow si falla (Feature 4). |
 | PWA | ✅ Funcional | SW generado, manifest, instalable. |
 | Deploy Vercel | ✅ Live | https://iamentor.vercel.app |
 | Tests E2E | ✅ 23/23 | Suite idempotente, 9 pasos. |
@@ -1095,3 +1165,188 @@ ETAPA 3 — 50.000+ usuarios  (~$1.000+/mes)
 | Modo offline PWA | 🟡 Alto — funciona sin internet | Alta |
 | Exportar plan PDF / ics | 🟡 Medio — compartir con tutor/compañeros | Baja |
 | Grupos de estudio | 🔵 Bajo — planes compartidos con compañeros | Alta |
+
+---
+
+## 19. Detección de Alucinación de Progreso
+
+> **Problema:** los estudiantes pueden marcar temas como "dominados" demasiado rápido sin haber consolidado el aprendizaje.
+
+### Flujo completo
+
+```
+Usuario toca TopicPill → status 'green'
+  │
+  ├── DB update optimista (status = 'green', last_studied = NOW())
+  │
+  └── POST /api/topics/complete
+        │
+        ├── INSERT en topic_completions
+        │
+        ├── COUNT completaciones sin desafío en ventana de 2 horas
+        │     count ≤ 3 → { needs_validation: false }  → fin
+        │     count > 3 → generar desafío MCQ ↓
+        │
+        └── Claude Haiku genera pregunta:
+              prompt: topic.name + topic.full_description
+              output: { question, options[4], correct_index }
+              fallback: self-assessment de 4 niveles
+              → guardar challenge en topic_completions (correct_index server-side)
+              → return { needs_validation: true, challenge }
+
+Frontend muestra <ProgressHallucinationGuard>
+  │
+  ├── Usuario selecciona opción y confirma
+  │
+  └── POST /api/topics/validate
+        │
+        ├── Recupera correct_index de DB (nunca viaja al cliente)
+        ├── Compara selected_index con correct_index
+        │
+        ├── passed  → { new_status: 'green' }, cierra modal
+        └── failed  → UPDATE topics SET status = 'yellow'
+                      → UI revierte TopicPill a amarillo
+```
+
+### Parámetros de detección
+
+| Parámetro | Valor por defecto |
+|-----------|-------------------|
+| Ventana temporal | 2 horas |
+| Umbral de activación | > 3 temas |
+| Modelo para MCQ | `claude-haiku-4-5-20251001` |
+| Status al fallar | `'yellow'` (necesita repaso) |
+| Acción al omitir | Mantiene `'green'` (beneficio de la duda) |
+
+### Archivos involucrados
+
+| Archivo | Rol |
+|---------|-----|
+| [app/api/topics/complete/route.ts](app/api/topics/complete/route.ts) | Registro + detección + generación MCQ |
+| [app/api/topics/validate/route.ts](app/api/topics/validate/route.ts) | Validación server-side + reversión |
+| [components/features/ProgressHallucinationGuard.tsx](components/features/ProgressHallucinationGuard.tsx) | Modal con MCQ + pantalla de resultado |
+| [app/(app)/subjects/[id]/SubjectDetailClient.tsx](app/(app)/subjects/[id]/SubjectDetailClient.tsx) | Intercepta `handleTopicStatusChange` cuando `status === 'green'` |
+| [supabase/migrations_features456.sql](supabase/migrations_features456.sql) | Tabla `topic_completions` |
+
+### Seguridad del desafío
+
+El campo `challenge_correct_index` **nunca se envía al cliente**. Solo viaja `completion_id + question + options[]`. La validación siempre ocurre server-side comparando `selected_index` con el valor en DB.
+
+---
+
+## 20. Heatmap de Dominio Académico
+
+> **Objetivo:** visualizar el progreso histórico del dominio por materia para motivar al estudiante y detectar materias olvidadas.
+
+### Concepto visual
+
+```
+              sem 1   sem 2   sem 3   sem 4   sem 5   sem 6   sem 7   sem 8
+Física         ░░░     🟥     🟥      🟧     🟧      🟩      🟩      🟩
+Algoritmos     ░░░     🟥     🟧      🟩     🟩      🟩      🟩      🟩
+Química ⚠      🟧     🟧      🟧      🟧     🟧      🟧      ░░░     ░░░
+Anatomía       🟥     🟥      🟥      🟥     🟥      🟥      🟥      🟥
+
+🟩 ≥ 70%   🟧 40–69%   🟥 1–39%   ░░░ sin datos
+⚠ sin actividad en > 7 días
+```
+
+### Pipeline de datos
+
+```
+1. stats/page.tsx (Server Component)
+   → UPSERT progress_snapshots de hoy (fire-and-forget al cargar la página)
+
+2. DomainHeatmap.tsx (Client Component)
+   → mount: POST /api/progress/snapshot (idempotente, confirma snapshot)
+   → GET /api/progress/snapshot?days=56
+   → renderiza CSS-grid con los últimos 8 semanas
+
+3. /api/progress/snapshot GET
+   → agrupa snapshots por (subject_id, ISO week)
+   → calcula promedio semanal de health_score
+   → detecta inactive_subjects (sin mejora en 7 días)
+   → retorna { subjects, weeks, labels, grid, inactive_subjects }
+```
+
+### Cálculo de `health_score`
+
+```
+health_score = green_topics / total_topics   (rango 0.0000–1.0000)
+```
+
+Almacenado como `DECIMAL(5,4)` en `progress_snapshots`. Se calcula al momento del upsert desde el estado actual de todos los temas de la materia.
+
+### Semanas con alerta de inactividad
+
+Una materia se marca como inactiva si en los últimos 7 días:
+- No tiene ningún snapshot, **o**
+- No tiene ninguna mejora de `health_score` entre snapshots consecutivos
+
+Se resalta con `⚠` en rojo junto al nombre de la materia en el heatmap.
+
+### Archivos involucrados
+
+| Archivo | Rol |
+|---------|-----|
+| [app/api/progress/snapshot/route.ts](app/api/progress/snapshot/route.ts) | POST: upsert diario / GET: grid agregado |
+| [components/features/DomainHeatmap.tsx](components/features/DomainHeatmap.tsx) | CSS-grid heatmap auto-fetching |
+| [app/(app)/stats/StatsClient.tsx](app/(app)/stats/StatsClient.tsx) | Renderiza `<DomainHeatmap />` |
+| [app/(app)/stats/page.tsx](app/(app)/stats/page.tsx) | Upsert server-side al cargar la página |
+| [supabase/migrations_features456.sql](supabase/migrations_features456.sql) | Tabla `progress_snapshots` + índice |
+
+---
+
+## 21. Ajuste por Carga Cognitiva
+
+> **Problema:** en semanas de exámenes, el entrenamiento físico intenso compite con la capacidad cognitiva disponible para el estudio.
+
+### Lógica central
+
+```typescript
+// gym/page.tsx — Server Component
+const upcomingEvents = await supabase
+  .from('academic_events')
+  .select('type, date')
+  .gte('date', today)
+  .lte('date', in14Days)
+
+const minDays = min(upcomingEvents.map(ev => daysUntil(ev.date)))
+const studyMode = determineStudyMode(minDays)
+// 'exam_prep' | 'active_review' | 'normal' | 'light' | null
+
+// GymClient recibe studyMode como prop
+// exercises.ts → getWorkoutPlan(..., studyMode)
+```
+
+### Tabla de decisión
+
+| `study_mode` | `energyLevel` | Tipo forzado | Duración | Mensaje al usuario |
+|---|---|---|---|---|
+| `exam_prep` | cualquiera | `movilidad` | 20 min | "Semana de parciales detectada. Hoy priorizamos recuperación..." |
+| `active_review` | 4–5 | maintenance (no completo) | 35 min | "Tenés un parcial próximo..." |
+| `active_review` | ≤ 3 | sin cambio | según energía | — |
+| `normal` / `light` | cualquiera | sin cambio | según energía | — |
+
+### Campo `cognitiveLoadOverride`
+
+`getWorkoutPlan()` ahora retorna `cognitiveLoadOverride: boolean`. Es `true` cuando el plan fue alterado por `study_mode`. Puede usarse para mostrar un indicador visual o loguear el evento.
+
+### Reutilización de `study_mode`
+
+El mismo campo `study_mode` de `StudyPriorityResult` (generado por `lib/study-priority.ts → determineStudyMode()`) se usa en:
+
+- `api/ai/plan`: instruye a Claude a generar bloques de estudio en modo examen
+- `gym/page.tsx`: detecta si hay parciales próximos para ajustar el entrenamiento
+- `GymClient.tsx`: muestra el banner contextual
+
+Esto garantiza coherencia: el sistema siempre tiene una única fuente de verdad para el nivel de urgencia académica.
+
+### Archivos involucrados
+
+| Archivo | Rol |
+|---------|-----|
+| [lib/exercises.ts](lib/exercises.ts) | `getWorkoutPlan(..., studyMode?)` — lógica de override |
+| [app/(app)/gym/page.tsx](app/(app)/gym/page.tsx) | Fetcha eventos, calcula `studyMode`, pasa a GymClient |
+| [app/(app)/gym/GymClient.tsx](app/(app)/gym/GymClient.tsx) | Acepta `studyMode`, pasa a `getWorkoutPlan`, renderiza banner |
+| [lib/study-priority.ts](lib/study-priority.ts) | `determineStudyMode(days)` — función reutilizada |

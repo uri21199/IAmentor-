@@ -7,6 +7,7 @@ import { Card, CardHeader, CardTitle } from '@/components/ui/Card'
 import { ProgressBar } from '@/components/ui/ProgressBar'
 import { Badge } from '@/components/ui/Badge'
 import Button from '@/components/ui/Button'
+import DomainHeatmap from '@/components/features/DomainHeatmap'
 
 interface Props {
   checkins: any[]
@@ -215,6 +216,9 @@ export default function StatsClient({
           </div>
         </div>
       )}
+
+      {/* Feature 5: Domain heatmap */}
+      <DomainHeatmap />
 
       {/* Workout stats */}
       <Card>

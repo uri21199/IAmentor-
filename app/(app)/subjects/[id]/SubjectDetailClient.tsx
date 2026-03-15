@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { format, parseISO, differenceInDays } from 'date-fns'
+import { format, parseISO, differenceInDays, startOfDay } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { createClient } from '@/lib/supabase'
 import { Card, CardHeader, CardTitle } from '@/components/ui/Card'
@@ -12,7 +12,8 @@ import { ProgressBar } from '@/components/ui/ProgressBar'
 import { TopicPill } from '@/components/ui/TopicPill'
 import Button from '@/components/ui/Button'
 import { getDaysColor, getEventTypeLabel } from '@/lib/study-priority'
-import type { SubjectWithDetails, AcademicEvent, Topic, TopicStatus, AcademicEventType } from '@/types'
+import type { SubjectWithDetails, AcademicEvent, Topic, TopicStatus, AcademicEventType, HallucinationChallenge } from '@/types'
+import ProgressHallucinationGuard from '@/components/features/ProgressHallucinationGuard'
 
 // How many topics to show before collapsing per unit
 const TOPICS_SHOWN_DEFAULT = 4
@@ -123,6 +124,9 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
   const [movingTopic, setMovingTopic] = useState<{ id: string; name: string; fromUnitId: string } | null>(null)
   const [topicActionLoading, setTopicActionLoading] = useState(false)
 
+  // ── Feature 4: Hallucination detection ────────────────────────────────────
+  const [hallucinationChallenge, setHallucinationChallenge] = useState<HallucinationChallenge | null>(null)
+
   // ── Selected unit in class log modal ──────────────────────
   const [classLogUnitId, setClassLogUnitId] = useState('')
   const [editEventLoading, setEditEventLoading] = useState(false)
@@ -147,6 +151,7 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
 
   // ── Topic status change ───────────────────────────────────
   async function handleTopicStatusChange(topicId: string, status: TopicStatus) {
+    // Optimistic UI update
     setUnitTopics(prev => {
       const next = { ...prev }
       for (const unitId in next) {
@@ -154,11 +159,58 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
       }
       return next
     })
+
+    // Persist to DB
     await supabase
       .from('topics')
       .update({ status, last_studied: new Date().toISOString() })
       .eq('id', topicId)
-    // Refresh server cache so subject list shows updated progress on back navigation
+
+    // Feature 4: When marking as mastered (green), check for hallucination of progress
+    if (status === 'green') {
+      try {
+        const topicName = Object.values(unitTopics)
+          .flat()
+          .find(t => t.id === topicId)?.name ?? ''
+
+        const res = await fetch('/api/topics/complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            topic_id: topicId,
+            subject_id: subject.id,
+            topic_name: topicName,
+          }),
+        })
+        const data = await res.json()
+        if (data.needs_validation && data.challenge) {
+          setHallucinationChallenge(data.challenge)
+          // Don't refresh yet — wait for validation result
+          return
+        }
+      } catch {
+        // Non-critical: if detection fails, proceed normally
+      }
+    }
+
+    router.refresh()
+  }
+
+  // Called by ProgressHallucinationGuard after validation completes
+  function handleValidationResult(passed: boolean, newStatus: TopicStatus) {
+    setHallucinationChallenge(null)
+    if (!passed && hallucinationChallenge) {
+      // Revert optimistic update to yellow
+      setUnitTopics(prev => {
+        const next = { ...prev }
+        for (const unitId in next) {
+          next[unitId] = next[unitId].map(t =>
+            t.id === hallucinationChallenge.topic_id ? { ...t, status: newStatus } : t
+          )
+        }
+        return next
+      })
+    }
     router.refresh()
   }
 
@@ -799,7 +851,7 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
           <div>
             <div className="space-y-2">
               {visibleEvents.map(event => {
-                const days  = differenceInDays(parseISO(event.date), new Date())
+                const days  = differenceInDays(parseISO(event.date), startOfDay(new Date()))
                 const color = getDaysColor(days)
                 return (
                   <div key={event.id} className="flex items-center gap-2 p-3 rounded-2xl bg-surface border border-border-subtle">
@@ -1929,6 +1981,18 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── Feature 4: Hallucination detection challenge modal ──────────────── */}
+      {hallucinationChallenge && (
+        <ProgressHallucinationGuard
+          challenge={hallucinationChallenge}
+          onResult={handleValidationResult}
+          onClose={() => {
+            setHallucinationChallenge(null)
+            router.refresh()
+          }}
+        />
       )}
     </div>
   )

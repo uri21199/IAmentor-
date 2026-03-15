@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { format, differenceInDays, parseISO } from 'date-fns'
+import { format, differenceInDays, parseISO, startOfDay } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { createClient } from '@/lib/supabase'
 import { Badge } from '@/components/ui/Badge'
@@ -295,7 +295,7 @@ export default function SubjectsClient({
             const progress      = getProgress(subject)
             const nearestEvent  = getNearestEvent(subject.id)
             const daysToEvent   = nearestEvent
-              ? differenceInDays(parseISO(nearestEvent.date), new Date())
+              ? differenceInDays(parseISO(nearestEvent.date), startOfDay(new Date()))
               : null
 
             return (
@@ -451,7 +451,7 @@ export default function SubjectsClient({
           </div>
           <div className="space-y-2">
             {visibleEvents.map(event => {
-              const days  = differenceInDays(parseISO(event.date), new Date())
+              const days  = differenceInDays(parseISO(event.date), startOfDay(new Date()))
               const color = getDaysColor(days)
               const subColor = getSubjectColor(event.subject_id)
               return (
