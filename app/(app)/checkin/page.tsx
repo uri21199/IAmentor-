@@ -10,7 +10,7 @@ import Button from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import type { StressLevel, WorkMode, CheckInFormData, TravelSegment } from '@/types'
 
-const STEPS = ['Estado', 'Trabajo', 'Facultad', 'Viaje', 'Resumen']
+const ALL_STEPS = ['Estado', 'Trabajo', 'Facultad', 'Viaje', 'Resumen']
 
 const LOCATION_CHIPS = ['Casa', 'Trabajo', 'Facultad']
 
@@ -30,6 +30,13 @@ export default function CheckInPage() {
   const [loadingMsg, setLoadingMsg] = useState('')
   const [alreadyDone, setAlreadyDone] = useState(false)
   const [checking, setChecking] = useState(true)
+  const [isEmployed, setIsEmployed] = useState<boolean | null>(null)
+  const [subjects, setSubjects] = useState<{ id: string; name: string }[]>([])
+
+  // Active steps: skip "Trabajo" if user is not employed
+  const STEPS = isEmployed === false
+    ? ALL_STEPS.filter(s => s !== 'Trabajo')
+    : ALL_STEPS
 
   const [form, setForm] = useState<CheckInFormData>({
     sleep_quality: 3,
@@ -71,10 +78,14 @@ export default function CheckInPage() {
           .single()
 
         if (config) {
-          // If user marked themselves as not employed, default to no_work
-          if (config.is_employed === false) {
+          // If user marked themselves as not employed, default to no_work and skip work step
+          const notEmployed = config.is_employed === false ||
+            (config.is_employed === null && Array.isArray(config.work_days_json) && config.work_days_json.length === 0)
+          if (notEmployed) {
+            setIsEmployed(false)
             setForm(f => ({ ...f, work_mode: 'no_work' }))
           } else {
+            setIsEmployed(true)
             const todayDow = new Date().getDay()
             const workDays: number[] = config.work_days_json || [1, 2, 3, 4, 5]
             if (workDays.includes(todayDow)) {
@@ -92,7 +103,17 @@ export default function CheckInPage() {
               setForm(f => ({ ...f, work_mode: 'no_work' }))
             }
           }
+        } else {
+          setIsEmployed(true)
         }
+
+        // Load subjects for faculty step
+        const { data: subjectsData } = await supabase
+          .from('subjects')
+          .select('id, name')
+          .eq('user_id', user.id)
+          .order('name')
+        if (subjectsData) setSubjects(subjectsData)
       } finally {
         setChecking(false)
       }
@@ -161,6 +182,9 @@ export default function CheckInPage() {
         console.error('Plan generation network error:', planErr)
       }
 
+      // Evaluate smart deadline alerts (fire-and-forget — don't block navigation)
+      fetch('/api/notifications').catch(() => {})
+
       router.push('/today')
     } catch (err) {
       console.error(err)
@@ -170,10 +194,11 @@ export default function CheckInPage() {
   }
 
   function canProceed(): boolean {
-    if (step === 2 && form.has_faculty) {
+    const currentStepName = STEPS[step]
+    if (currentStepName === 'Facultad' && form.has_faculty) {
       return !!form.faculty_mode && !!form.faculty_subject
     }
-    if (step === 3) {
+    if (currentStepName === 'Viaje') {
       return form.travel_route.every(s =>
         s.origin && s.origin !== '__custom__' &&
         s.destination && s.destination !== '__custom__'
@@ -279,7 +304,7 @@ export default function CheckInPage() {
         )}
 
         {/* STEP 1: Trabajo */}
-        {step === 1 && (
+        {STEPS[step] === 'Trabajo' && (
           <div className="space-y-3">
             <p className="text-sm font-medium text-text-secondary">Modalidad del día</p>
             <div className="grid grid-cols-2 gap-3">
@@ -309,7 +334,7 @@ export default function CheckInPage() {
         )}
 
         {/* STEP 2: Facultad */}
-        {step === 2 && (
+        {STEPS[step] === 'Facultad' && (
           <div className="space-y-4">
             <div className="space-y-2">
               <p className="text-sm font-medium text-text-secondary">¿Tenés facultad hoy?</p>
@@ -357,15 +382,34 @@ export default function CheckInPage() {
 
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-text-secondary">¿Qué materia tenés hoy?</p>
-                  <input
-                    type="text"
-                    value={form.faculty_subject || ''}
-                    onChange={e => setForm(f => ({ ...f, faculty_subject: e.target.value }))}
-                    placeholder="Ej: Química Básica"
-                    className="w-full h-11 px-4 rounded-2xl bg-surface-2 border border-border-subtle
-                               text-text-primary placeholder-text-secondary text-sm
-                               focus:outline-none focus:border-primary/60 transition-colors"
-                  />
+                  {subjects.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {subjects.map(s => (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => setForm(f => ({ ...f, faculty_subject: s.name }))}
+                          className={`px-4 py-2.5 rounded-xl text-sm font-medium border transition-all duration-200 min-h-[44px] ${
+                            form.faculty_subject === s.name
+                              ? 'border-primary bg-primary/20 text-text-primary'
+                              : 'border-border-subtle bg-surface-2 text-text-secondary'
+                          }`}
+                        >
+                          {s.name}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <input
+                      type="text"
+                      value={form.faculty_subject || ''}
+                      onChange={e => setForm(f => ({ ...f, faculty_subject: e.target.value }))}
+                      placeholder="Ej: Química Básica"
+                      className="w-full h-11 px-4 rounded-2xl bg-surface-2 border border-border-subtle
+                                 text-text-primary placeholder-text-secondary text-sm
+                                 focus:outline-none focus:border-primary/60 transition-colors"
+                    />
+                  )}
                 </div>
               </>
             )}
@@ -373,7 +417,7 @@ export default function CheckInPage() {
         )}
 
         {/* STEP 3: Viaje */}
-        {step === 3 && (
+        {STEPS[step] === 'Viaje' && (
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <div>
@@ -552,7 +596,7 @@ export default function CheckInPage() {
         )}
 
         {/* STEP 4: Resumen */}
-        {step === 4 && (
+        {STEPS[step] === 'Resumen' && (
           <div className="space-y-4">
             <div className="rounded-3xl bg-surface-2 border border-border-subtle overflow-hidden">
               <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">

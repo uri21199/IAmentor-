@@ -5,10 +5,13 @@
  * No DB calls, no side effects — only pure functions.
  *
  * Triggers implemented:
- *   1. post_class   — 15 min after a class ends, if no class_log exists yet
- *   2. energy_boost — energy ≥4 but remaining plan is mostly light tasks
- *   3. exam_alert   — exam/event in ≤7 days with pending red topics
- *   4. early_win    — exam in 8–30 days, suggests a quick study session now
+ *   1. post_class        — 15 min after a class ends, if no class_log exists yet
+ *   2. energy_boost      — energy ≥4 but remaining plan is mostly light tasks
+ *   3. exam_alert        — exam/event in ≤7 days with pending red topics (legacy)
+ *   4. early_win         — exam in 8–30 days, suggests a quick study session now
+ *   5. exam_approaching  — smart deadline alert at 14/10/7/5/1 days before a parcial
+ *   6. deadline_approaching — same for entrega_tp
+ *   7. exam_today        — day-of alert (0 days)
  */
 
 import type {
@@ -17,17 +20,38 @@ import type {
   ClassScheduleEntry,
   SubjectWithDetails,
   AcademicEvent,
+  DeadlineAlertContext,
 } from '@/types'
 import { calculateStudyPriorities } from './study-priority'
 
 // ── Public types ───────────────────────────────────────────────────────────────
 
-export type NotificationType = 'post_class' | 'energy_boost' | 'exam_alert' | 'early_win'
+export type NotificationType =
+  | 'post_class'
+  | 'energy_boost'
+  | 'exam_alert'
+  | 'early_win'
+  | 'exam_approaching'
+  | 'deadline_approaching'
+  | 'exam_today'
 
 /** A notification ready to be persisted to the DB */
 export interface PendingNotification {
   type: NotificationType
+  /** Legacy single-field message (used for post_class, energy_boost, early_win) */
   message: string
+  /** Short title for deadline-type notifications */
+  title?: string
+  /** Rich body for deadline-type notifications */
+  body?: string
+  /** Snapshot of academic context at the moment of alert creation */
+  context_json?: DeadlineAlertContext
+  /** The academic_events.id this alert is for (deadline-type only) */
+  event_id?: string
+  /** The subjects.id this alert is for (deadline-type only) */
+  subject_id?: string
+  /** Which day-before trigger fired (14 | 10 | 7 | 5 | 1 | 0) */
+  trigger_days_before?: number
   /** Deep-link URL the user is taken to when they act on the notification */
   target_path: string
   /** ISO timestamp after which the notification is no longer relevant */
@@ -51,13 +75,34 @@ export interface TriggerInput {
   subjectsWithDetails: SubjectWithDetails[]
   academicEvents: AcademicEvent[]
 
-  // Already-created notifications for today (used for deduplication)
+  // Already-created notifications for today (used for deduplication of legacy types)
   existingTodayNotifications: Array<{
     type: string
     metadata: Record<string, unknown>
   }>
 
+  // Already-sent deadline notifications (used for dedup of new deadline-type alerts)
+  // Each entry is { event_id, trigger_days_before }
+  existingDeadlineNotifications: Array<{
+    event_id: string | null
+    trigger_days_before: number | null
+  }>
+
   /** Reference time — injectable for testing (defaults to now) */
+  now: Date
+}
+
+/** Input for the smart deadline alert evaluator (subset of TriggerInput) */
+export interface DeadlineAlertInput {
+  subjectsWithDetails: SubjectWithDetails[]
+  academicEvents: AcademicEvent[]
+  /** All daily plans from today forward (to count planned study sessions) */
+  upcomingPlans: DailyPlan[]
+  /** Already-sent deadline notifications */
+  existingDeadlineNotifications: Array<{
+    event_id: string | null
+    trigger_days_before: number | null
+  }>
   now: Date
 }
 
@@ -302,6 +347,186 @@ export function buildEarlyWinTrigger(input: TriggerInput): PendingNotification |
   }
 }
 
+// ── Trigger 5: Smart deadline alerts (14/10/7/5/1/0 days) ─────────────────────
+
+/** Day-before thresholds that trigger an alert */
+const DEADLINE_TRIGGER_DAYS = [14, 10, 7, 5, 1, 0] as const
+
+/**
+ * Generates the alert title for a deadline notification.
+ * Format: "[Materia] — [Tipo] en N días" or "hoy"
+ */
+function buildDeadlineTitle(
+  subjectName: string,
+  eventType: string,
+  daysRemaining: number
+): string {
+  const typeLabel =
+    eventType === 'parcial'              ? 'Parcial' :
+    eventType === 'parcial_intermedio'   ? 'Parcial Intermedio' :
+    eventType === 'entrega_tp'           ? 'Entrega TP' :
+    'Evento'
+
+  const whenLabel =
+    daysRemaining === 0  ? 'hoy' :
+    daysRemaining === 1  ? 'mañana' :
+    `en ${daysRemaining} días`
+
+  return `${subjectName} — ${typeLabel} ${whenLabel}`
+}
+
+/**
+ * Generates the rich body based on context (topic counts + days remaining).
+ * Keeps push text concise — no topic lists in the notification body.
+ */
+function buildDeadlineBody(ctx: DeadlineAlertContext): string {
+  const { red_topics = 0, days_remaining = 0 } = ctx
+
+  if (days_remaining === 0) {
+    return 'Hoy es el día. Repasá solo los conceptos clave, no empieces temas nuevos.'
+  }
+
+  if (days_remaining === 1) {
+    return 'Mañana es el día. Repasá solo los conceptos clave, no empieces temas nuevos.'
+  }
+
+  if (red_topics === 0) {
+    return 'Vas bien. Tenés todos los temas bajo control, seguí con el ritmo actual.'
+  }
+
+  if (days_remaining <= 3) {
+    return `Modo examen activado. Tenés ${red_topics} tema${red_topics > 1 ? 's' : ''} sin entender — enfocate en esos. Dejá los verdes para repasar el día anterior.`
+  }
+
+  if (days_remaining <= 7) {
+    return `Atención: tenés ${red_topics} tema${red_topics > 1 ? 's' : ''} sin entender. Priorizalos esta semana.`
+  }
+
+  // 10–14 days
+  return `Tenés ${red_topics} tema${red_topics > 1 ? 's' : ''} en rojo. Buen momento para avanzar sin presión.`
+}
+
+/**
+ * Counts planned study sessions for a subject from today until the event date.
+ * "Planned" means: a daily_plan block of type=study with matching subject_id,
+ * not yet completed.
+ */
+function countPlannedSessions(
+  subjectId: string,
+  eventDate: string,
+  upcomingPlans: DailyPlan[],
+  todayStr: string
+): number {
+  let count = 0
+  for (const plan of upcomingPlans) {
+    if (plan.date < todayStr || plan.date > eventDate) continue
+    for (const block of plan.plan_json) {
+      if (block.type === 'study' && block.subject_id === subjectId && !block.completed) {
+        count++
+      }
+    }
+  }
+  return count
+}
+
+/**
+ * Evaluates all academic_events and returns new deadline-type notifications
+ * to persist. Runs at check-in time, when events are added, or on topic change.
+ *
+ * Rules (applied per event):
+ *   - Only fires for parcial / parcial_intermedio / entrega_tp events
+ *   - Only for events dated in the future (including today)
+ *   - Only on exact threshold days: 14, 10, 7, 5, 1, 0
+ *   - Dedup: skips if (event_id, trigger_days_before) already in existingDeadlineNotifications
+ */
+export function checkAndScheduleAlerts(input: DeadlineAlertInput): PendingNotification[] {
+  const results: PendingNotification[] = []
+
+  // Build a fast lookup map of subjects by id
+  const subjectMap = new Map(input.subjectsWithDetails.map(s => [s.id, s]))
+
+  const todayStr = input.now.toISOString().slice(0, 10)
+
+  for (const event of input.academicEvents) {
+    // Only academic exam-type events with a linked subject
+    if (!event.subject_id) continue
+    if (!['parcial', 'parcial_intermedio', 'entrega_tp'].includes(event.type)) continue
+    if (event.date < todayStr) continue
+
+    const daysRemaining = Math.round(
+      (new Date(event.date).setHours(0, 0, 0, 0) - new Date(todayStr).setHours(0, 0, 0, 0)) /
+      (1000 * 60 * 60 * 24)
+    )
+
+    // Only fire on exact threshold days
+    if (!(DEADLINE_TRIGGER_DAYS as readonly number[]).includes(daysRemaining)) continue
+
+    // Dedup check
+    const alreadySent = input.existingDeadlineNotifications.some(
+      n => n.event_id === event.id && n.trigger_days_before === daysRemaining
+    )
+    if (alreadySent) continue
+
+    const subject = subjectMap.get(event.subject_id)
+    if (!subject) continue
+
+    // Count topic statuses
+    const allTopics = subject.units.flatMap(u => u.topics)
+    const redTopics    = allTopics.filter(t => t.status === 'red').length
+    const yellowTopics = allTopics.filter(t => t.status === 'yellow').length
+    const greenTopics  = allTopics.filter(t => t.status === 'green').length
+
+    // Count planned study sessions between today and event
+    const plannedSessions = countPlannedSessions(
+      subject.id,
+      event.date,
+      input.upcomingPlans,
+      todayStr
+    )
+
+    const context: DeadlineAlertContext = {
+      red_topics:             redTopics,
+      yellow_topics:          yellowTopics,
+      green_topics:           greenTopics,
+      days_remaining:         daysRemaining,
+      planned_study_sessions: plannedSessions,
+    }
+
+    const title = buildDeadlineTitle(subject.name, event.type, daysRemaining)
+    const body  = buildDeadlineBody(context)
+
+    const notifType: NotificationType =
+      daysRemaining === 0           ? 'exam_today' :
+      event.type === 'entrega_tp'   ? 'deadline_approaching' :
+      'exam_approaching'
+
+    // Expires end of the event day (irrelevant after the exam)
+    const expiresAt = new Date(event.date)
+    expiresAt.setHours(23, 59, 59, 0)
+
+    results.push({
+      type:                 notifType,
+      message:              `${title}: ${body}`,   // fallback for legacy renders
+      title,
+      body,
+      context_json:         context,
+      event_id:             event.id,
+      subject_id:           event.subject_id,
+      trigger_days_before:  daysRemaining,
+      target_path:          `/subjects/${event.subject_id}`,
+      expires_at:           expiresAt.toISOString(),
+      metadata: {
+        subject_name:       subject.name,
+        event_type:         event.type,
+        event_date:         event.date,
+        days_remaining:     daysRemaining,
+      },
+    })
+  }
+
+  return results
+}
+
 // ── Main evaluator ──────────────────────────────────────────────────────────────
 
 /**
@@ -310,6 +535,9 @@ export function buildEarlyWinTrigger(input: TriggerInput): PendingNotification |
  *
  * Order matters for UX: post_class → exam_alert → energy_boost → early_win
  * (most urgent / time-sensitive first)
+ *
+ * Smart deadline alerts (checkAndScheduleAlerts) are evaluated separately
+ * and merged by the API route, so they don't suppress legacy triggers here.
  */
 export function evaluateTriggers(input: TriggerInput): PendingNotification[] {
   const results: PendingNotification[] = []
@@ -317,7 +545,7 @@ export function evaluateTriggers(input: TriggerInput): PendingNotification[] {
   // 1. Post-class: multiple can fire simultaneously (one per class)
   results.push(...buildPostClassTriggers(input))
 
-  // 2. Exam alert: highest academic urgency
+  // 2. Exam alert: highest academic urgency (≤7 days, red topics)
   const examAlert = buildExamAlertTrigger(input)
   if (examAlert) results.push(examAlert)
 

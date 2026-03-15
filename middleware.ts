@@ -29,7 +29,12 @@ export async function middleware(request: NextRequest) {
     request.nextUrl.pathname.startsWith('/subjects') ||
     request.nextUrl.pathname.startsWith('/gym') ||
     request.nextUrl.pathname.startsWith('/stats') ||
-    request.nextUrl.pathname.startsWith('/settings')
+    request.nextUrl.pathname.startsWith('/settings') ||
+    request.nextUrl.pathname.startsWith('/trabajo') ||
+    request.nextUrl.pathname.startsWith('/cursada') ||
+    request.nextUrl.pathname.startsWith('/cuatrimestres') ||
+    request.nextUrl.pathname.startsWith('/agenda') ||
+    request.nextUrl.pathname.startsWith('/calendar')
 
   if (isAppRoute && !user) {
     const url = request.nextUrl.clone()

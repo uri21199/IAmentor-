@@ -339,17 +339,65 @@ export interface ToastMessage {
 // NOTIFICATION TYPES
 // ============================================================
 
-export type NotificationType = 'post_class' | 'energy_boost' | 'exam_alert' | 'early_win'
+export type NotificationType =
+  | 'post_class'
+  | 'energy_boost'
+  | 'exam_alert'
+  | 'early_win'
+  | 'exam_approaching'
+  | 'deadline_approaching'
+  | 'exam_today'
 
 export interface AppNotification {
   id: string
   user_id: string
   type: NotificationType
+  /** Short title — "[Materia] — [Tipo] en N días" */
+  title: string | null
+  /** Rich body with academic context */
+  body: string | null
+  /** Legacy single-field message (kept for older notification types) */
   message: string
-  target_path: string | null  // deep link URL; null = informational only
+  target_path: string | null
   read_status: boolean
   triggered_at: string
   expires_at: string | null
   metadata: Record<string, unknown>
+  /** Snapshot of topics + sessions at alert time */
+  context_json: DeadlineAlertContext
+  /** True once push was delivered to device */
+  push_sent: boolean
+  event_id: string | null
+  subject_id: string | null
+  /** Which day-before trigger fired (14 | 10 | 7 | 5 | 1 | 0) */
+  trigger_days_before: number | null
+  created_at: string
+}
+
+export interface DeadlineAlertContext {
+  red_topics?: number
+  yellow_topics?: number
+  green_topics?: number
+  days_remaining?: number
+  planned_study_sessions?: number
+}
+
+// ============================================================
+// POMODORO TYPES
+// ============================================================
+
+export type TopicComprehension = 'red' | 'yellow' | 'green'
+
+export interface PomodoroSession {
+  id: string
+  user_id: string
+  block_id: string | null
+  subject_id: string | null
+  topic_id: string | null
+  started_at: string
+  completed_at: string | null
+  duration_minutes: number | null
+  was_completed: boolean
+  topic_status_after: TopicComprehension | null
   created_at: string
 }

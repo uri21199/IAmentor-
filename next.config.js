@@ -4,6 +4,8 @@ const withPWA = require('next-pwa')({
   register: true,
   skipWaiting: true,
   disable: process.env.NODE_ENV === 'development',
+  // worker/index.js is merged into the generated sw.js for push event handling
+  customWorkerDir: 'worker',
 })
 
 const nextConfig = {

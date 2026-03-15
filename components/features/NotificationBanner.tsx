@@ -6,10 +6,13 @@ import type { AppNotification, NotificationType } from '@/types'
 // ── Icon + accent color per notification type ──────────────────────────────────
 
 const TYPE_META: Record<NotificationType, { icon: string; accent: string; label: string }> = {
-  post_class:    { icon: '📚', accent: 'border-cyan-500/40 bg-cyan-500/5',   label: 'Post-clase' },
-  energy_boost:  { icon: '⚡', accent: 'border-amber-500/40 bg-amber-500/5', label: 'Energía alta' },
-  exam_alert:    { icon: '🎯', accent: 'border-red-500/40 bg-red-500/5',     label: 'Examen próximo' },
-  early_win:     { icon: '✨', accent: 'border-primary/40 bg-primary/5',     label: 'Victoria temprana' },
+  post_class:           { icon: '📚', accent: 'border-cyan-500/40 bg-cyan-500/5',    label: 'Post-clase' },
+  energy_boost:         { icon: '⚡', accent: 'border-amber-500/40 bg-amber-500/5',  label: 'Energía alta' },
+  exam_alert:           { icon: '🎯', accent: 'border-red-500/40 bg-red-500/5',      label: 'Examen próximo' },
+  early_win:            { icon: '✨', accent: 'border-primary/40 bg-primary/5',      label: 'Victoria temprana' },
+  exam_approaching:     { icon: '🎯', accent: 'border-amber-500/40 bg-amber-500/5',  label: 'Parcial próximo' },
+  deadline_approaching: { icon: '📋', accent: 'border-orange-500/40 bg-orange-500/5', label: 'Entrega próxima' },
+  exam_today:           { icon: '🚨', accent: 'border-red-500/40 bg-red-500/5',      label: 'Hoy es el día' },
 }
 
 // ── Single notification card ───────────────────────────────────────────────────
@@ -24,9 +27,12 @@ function NotificationCard({ notification, onAction, onDismiss }: NotificationCar
   const meta = TYPE_META[notification.type] ?? TYPE_META.early_win
 
   const actionLabel =
-    notification.type === 'post_class'   ? 'Cargar temas' :
-    notification.type === 'energy_boost' ? 'Replanificar' :
-    notification.type === 'exam_alert'   ? 'Ver materia' :
+    notification.type === 'post_class'            ? 'Cargar temas' :
+    notification.type === 'energy_boost'          ? 'Replanificar' :
+    notification.type === 'exam_alert'            ? 'Ver materia' :
+    notification.type === 'exam_approaching'      ? 'Ver materia' :
+    notification.type === 'deadline_approaching'  ? 'Ver materia' :
+    notification.type === 'exam_today'            ? 'Ver materia' :
     'Ver materia'
 
   return (
@@ -43,9 +49,16 @@ function NotificationCard({ notification, onAction, onDismiss }: NotificationCar
         <p className="text-xs font-semibold text-text-secondary uppercase tracking-wide mb-0.5">
           {meta.label}
         </p>
-        <p className="text-sm text-text-primary leading-snug">
-          {notification.message}
-        </p>
+        {notification.title ? (
+          <>
+            <p className="text-sm font-medium text-text-primary leading-snug">{notification.title}</p>
+            {notification.body && (
+              <p className="text-xs text-text-secondary mt-0.5 leading-relaxed">{notification.body}</p>
+            )}
+          </>
+        ) : (
+          <p className="text-sm text-text-primary leading-snug">{notification.message}</p>
+        )}
 
         {/* Action button */}
         {notification.target_path && (

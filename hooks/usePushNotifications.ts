@@ -11,11 +11,19 @@ interface UsePushNotificationsReturn {
   unsubscribe: () => Promise<void>
 }
 
+/** Converts a base64url VAPID public key to a Uint8Array for pushManager.subscribe() */
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
+  const rawData = atob(base64)
+  return Uint8Array.from([...rawData].map(char => char.charCodeAt(0)))
+}
+
 export function usePushNotifications(): UsePushNotificationsReturn {
-  const [supported, setSupported] = useState(false)
+  const [supported, setSupported]   = useState(false)
   const [permission, setPermission] = useState<NotificationPermission | null>(null)
   const [subscribed, setSubscribed] = useState(false)
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading]       = useState(false)
 
   useEffect(() => {
     const isSupported =
@@ -28,14 +36,10 @@ export function usePushNotifications(): UsePushNotificationsReturn {
 
     if (isSupported) {
       setPermission(Notification.permission)
-
-      navigator.serviceWorker.ready.then(registration => {
-        registration.pushManager.getSubscription().then(sub => {
-          setSubscribed(!!sub)
-        })
-      }).catch(() => {
-        // Service worker not registered yet
-      })
+      navigator.serviceWorker.ready
+        .then(reg => reg.pushManager.getSubscription())
+        .then(sub => setSubscribed(!!sub))
+        .catch(() => { /* SW not ready yet */ })
     }
   }, [])
 
@@ -43,17 +47,37 @@ export function usePushNotifications(): UsePushNotificationsReturn {
     if (!supported) return
     setLoading(true)
     try {
+      const perm = await Notification.requestPermission()
+      setPermission(perm)
+      if (perm !== 'granted') return
+
+      const vapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY
+      if (!vapidKey) {
+        console.warn('NEXT_PUBLIC_VAPID_PUBLIC_KEY not set — push disabled')
+        return
+      }
+
       const registration = await navigator.serviceWorker.ready
-      const permission = await Notification.requestPermission()
-      setPermission(permission)
-
-      if (permission !== 'granted') return
-
       const sub = await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY,
+        applicationServerKey: urlBase64ToUint8Array(vapidKey),
       })
-      setSubscribed(!!sub)
+
+      // Save subscription to server
+      const subJson = sub.toJSON()
+      await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          endpoint: sub.endpoint,
+          keys: {
+            p256dh: subJson.keys?.p256dh ?? '',
+            auth:   subJson.keys?.auth   ?? '',
+          },
+        }),
+      })
+
+      setSubscribed(true)
     } catch (err) {
       console.error('Push subscribe error:', err)
     } finally {
@@ -68,6 +92,12 @@ export function usePushNotifications(): UsePushNotificationsReturn {
       const registration = await navigator.serviceWorker.ready
       const sub = await registration.pushManager.getSubscription()
       if (sub) {
+        // Remove from server first
+        await fetch('/api/push/subscribe', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ endpoint: sub.endpoint }),
+        })
         await sub.unsubscribe()
         setSubscribed(false)
       }

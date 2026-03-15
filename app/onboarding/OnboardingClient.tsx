@@ -93,6 +93,7 @@ export default function OnboardingClient() {
       await supabase.from('user_config').upsert(
         {
           user_id: user.id,
+          is_employed: doesWork,
           work_days_json: doesWork ? workConfig.work_days_json : [],
           work_start: workConfig.work_start,
           work_end: workConfig.work_end,
@@ -130,6 +131,10 @@ export default function OnboardingClient() {
     }
   }
 
+  function skipSemesterAndSubjects() {
+    setStep(4)
+  }
+
   async function saveSubjectsAndAdvance() {
     if (subjects.length === 0 || !semesterId) return
     setSaving(true)
@@ -159,7 +164,6 @@ export default function OnboardingClient() {
 
   function canGoNext() {
     if (step === 2) return !!semester.name && !!semester.start_date && !!semester.end_date
-    if (step === 3) return subjects.length > 0
     return true
   }
 
@@ -486,13 +490,17 @@ export default function OnboardingClient() {
               </span>
             </div>
             <div className="flex items-center gap-3 p-3 rounded-2xl bg-surface-2 border border-border-subtle">
-              <span className="text-lg">✅</span>
-              <span className="text-sm text-text-primary">{semester.name}</span>
+              <span className="text-lg">{semester.name ? '✅' : '⏭️'}</span>
+              <span className="text-sm text-text-primary">
+                {semester.name || 'Cuatrimestre: omitido por ahora'}
+              </span>
             </div>
             <div className="flex items-center gap-3 p-3 rounded-2xl bg-surface-2 border border-border-subtle">
-              <span className="text-lg">✅</span>
+              <span className="text-lg">{subjects.length > 0 ? '✅' : '⏭️'}</span>
               <span className="text-sm text-text-primary">
-                {subjects.length} materia{subjects.length !== 1 ? 's' : ''} agregada{subjects.length !== 1 ? 's' : ''}
+                {subjects.length > 0
+                  ? `${subjects.length} materia${subjects.length !== 1 ? 's' : ''} agregada${subjects.length !== 1 ? 's' : ''}`
+                  : 'Materias: podés agregarlas después'}
               </span>
             </div>
           </div>
@@ -510,26 +518,46 @@ export default function OnboardingClient() {
 
       {/* Navigation buttons (steps 1–3) */}
       {step >= 1 && step <= 3 && (
-        <div className="flex gap-3 mt-6">
-          <Button
-            variant="secondary"
-            size="lg"
-            className="flex-1"
-            onClick={() => setStep(s => s - 1)}
-            disabled={saving}
-          >
-            ← Atrás
-          </Button>
-          <Button
-            variant="primary"
-            size="lg"
-            className="flex-1"
-            onClick={handleNext}
-            loading={saving}
-            disabled={!canGoNext() || saving}
-          >
-            {step === 3 ? 'Guardar y continuar →' : 'Siguiente →'}
-          </Button>
+        <div className="space-y-2 mt-6">
+          <div className="flex gap-3">
+            <Button
+              variant="secondary"
+              size="lg"
+              className="flex-1"
+              onClick={() => setStep(s => s - 1)}
+              disabled={saving}
+            >
+              ← Atrás
+            </Button>
+            <Button
+              variant="primary"
+              size="lg"
+              className="flex-1"
+              onClick={handleNext}
+              loading={saving}
+              disabled={!canGoNext() || saving || (step === 3 && subjects.length === 0)}
+            >
+              {step === 3 ? 'Guardar y continuar →' : 'Siguiente →'}
+            </Button>
+          </div>
+
+          {/* Skip options */}
+          {step === 2 && (
+            <button
+              onClick={skipSemesterAndSubjects}
+              className="w-full py-2.5 text-xs text-text-secondary hover:text-text-primary transition-colors"
+            >
+              El cuatrimestre aún no comenzó — omitir por ahora →
+            </button>
+          )}
+          {step === 3 && (
+            <button
+              onClick={() => setStep(4)}
+              className="w-full py-2.5 text-xs text-text-secondary hover:text-text-primary transition-colors"
+            >
+              Omitir materias por ahora — las agrego después →
+            </button>
+          )}
         </div>
       )}
     </div>

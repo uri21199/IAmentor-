@@ -26,22 +26,22 @@ export default async function SubjectsPage() {
         <p className="text-4xl mb-4">📚</p>
         <h2 className="text-xl font-bold text-text-primary mb-2">Sin cuatrimestre activo</h2>
         <p className="text-text-secondary text-sm mb-2">
-          Creá un cuatrimestre en Configuración y marcalo como activo.
+          Creá un cuatrimestre y marcalo como activo.
         </p>
         <p className="text-text-secondary text-xs mb-6">
           Una vez activo, volvé aquí para cargar tus materias y temas.
         </p>
         <Link
-          href="/settings"
+          href="/cuatrimestres"
           className="inline-block px-5 py-2.5 rounded-2xl bg-primary text-white text-sm font-medium"
         >
-          Ir a configuración →
+          Ir a Cuatrimestres →
         </Link>
       </div>
     )
   }
 
-  // Get subjects with unit/topic counts
+  // Get subjects with unit/topic counts (exclude soft-deleted)
   const { data: subjects } = await supabase
     .from('subjects')
     .select(`
@@ -52,6 +52,7 @@ export default async function SubjectsPage() {
       )
     `)
     .eq('semester_id', semester.id)
+    .is('deleted_at', null)
     .order('name')
 
   // Get upcoming academic events

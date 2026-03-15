@@ -1,8 +1,9 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
+import { createClient } from '@/lib/supabase'
 
 const NAV_SECTIONS = [
   {
@@ -72,11 +73,25 @@ const NAV_SECTIONS = [
         ),
       },
       {
-        href: '/gym',
-        label: 'Gym',
+        href: '/cursada',
+        label: 'Cursada',
         icon: (
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
-            <path d="M6.5 6.5h11M6.5 17.5h11M4 12h16M8 4l-2 8 2 8M16 4l2 8-2 8" />
+            <path d="M22 10v6M2 10l10-5 10 5-10 5z" />
+            <path d="M6 12v5c3 3 9 3 12 0v-5" />
+          </svg>
+        ),
+      },
+      {
+        href: '/cuatrimestres',
+        label: 'Cuatrimestres',
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+            <rect x="3" y="4" width="18" height="18" rx="2" />
+            <line x1="16" y1="2" x2="16" y2="6" />
+            <line x1="8" y1="2" x2="8" y2="6" />
+            <line x1="3" y1="10" x2="21" y2="10" />
+            <path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01M16 18h.01" />
           </svg>
         ),
       },
@@ -88,6 +103,37 @@ const NAV_SECTIONS = [
             <line x1="18" y1="20" x2="18" y2="10" />
             <line x1="12" y1="20" x2="12" y2="4" />
             <line x1="6" y1="20" x2="6" y2="14" />
+          </svg>
+        ),
+      },
+    ],
+  },
+  {
+    label: 'Salud',
+    items: [
+      {
+        href: '/gym',
+        label: 'Gym',
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+            <path d="M6.5 6.5h11M6.5 17.5h11M4 12h16M8 4l-2 8 2 8M16 4l2 8-2 8" />
+          </svg>
+        ),
+      },
+    ],
+  },
+  {
+    label: 'Mi perfil',
+    items: [
+      {
+        href: '/trabajo',
+        label: 'Horario laboral',
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+            <rect x="2" y="7" width="20" height="14" rx="2" />
+            <path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2" />
+            <line x1="12" y1="12" x2="12" y2="16" />
+            <line x1="10" y1="14" x2="14" y2="14" />
           </svg>
         ),
       },
@@ -118,6 +164,14 @@ interface SideDrawerProps {
 
 export default function SideDrawer({ isOpen, onClose, userEmail }: SideDrawerProps) {
   const pathname = usePathname()
+  const router = useRouter()
+  const supabase = createClient()
+
+  async function handleSignOut() {
+    onClose()
+    await supabase.auth.signOut()
+    router.push('/login')
+  }
 
   return (
     <>
@@ -196,7 +250,16 @@ export default function SideDrawer({ isOpen, onClose, userEmail }: SideDrawerPro
         </nav>
 
         {/* Drawer footer */}
-        <div className="px-5 py-5 border-t border-border-subtle">
+        <div className="px-4 py-4 border-t border-border-subtle space-y-3">
+          <button
+            onClick={handleSignOut}
+            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl text-sm font-medium text-red-400 hover:bg-red-500/10 transition-colors"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 shrink-0">
+              <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" />
+            </svg>
+            Cerrar sesión
+          </button>
           <p className="text-[10px] text-text-secondary text-center">Mentor IA — v2.0</p>
         </div>
       </aside>

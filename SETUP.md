@@ -61,6 +61,10 @@ VAPID_MAILTO=mailto:admin@mentoria.app
 
 # ── App URL (cambiar en producción) ───────────────────────
 NEXTAUTH_URL=https://iamentor.vercel.app
+NEXT_PUBLIC_BASE_URL=https://iamentor.vercel.app
+
+# ── Secret interno (para endpoint /api/push/send) ─────────
+INTERNAL_SECRET=una_cadena_aleatoria_segura_aqui
 ```
 
 ### Dónde conseguir cada variable
@@ -137,6 +141,9 @@ Ejecutar cada migración en SQL Editor → Nueva query, en este orden:
 | `migrations_v4.sql` | `class_logs` con topics_covered_json |
 | `migrations_v5.sql` | `ALTER TABLE class_logs ADD COLUMN due_date DATE` |
 | `migrations_v6.sql` | `push_subscriptions`, columna `is_employed` en user_config, UNIQUE constraint en notifications |
+| `migrations_v7.sql` | Tabla `pomodoro_sessions` |
+| `migrations_v8.sql` | Tabla `pomodoro_sessions` (versión actualizada) |
+| `migrations_v9.sql` | Smart deadline alerts: columnas `event_id`, `trigger_days_before`, `title`, `body`, `context_json`, `push_sent` en `notifications` + nuevo UNIQUE constraint |
 
 ```sql
 -- Verificar tablas esperadas tras todas las migraciones:
@@ -290,9 +297,9 @@ npm run lint     # ESLint (nota: desactivado en build)
 | Paso | Qué configura |
 |------|---------------|
 | 1. Bienvenida | Pantalla inicial |
-| 2. Trabajo | Días laborales, horario entrada/salida, modalidad |
+| 2. Trabajo | Días laborales, horario entrada/salida, modalidad. Si el usuario no trabaja, marcar `is_employed = false` — esto omitirá el paso de trabajo en el check-in diario |
 | 3. Cuatrimestre | Nombre, fechas inicio y fin del cuatrimestre |
-| 4. Materias | Agregar materias con nombre y color |
+| 4. Materias | Agregar materias con nombre y color (estas aparecen como chips en el check-in) |
 
 ### 9.3 Cargar el seed de datos de ejemplo (opcional)
 
@@ -311,11 +318,15 @@ Esto carga:
 - 17 unidades temáticas
 - 69 temas individuales
 
-### 9.4 Cargar clases del cuatrimestre (Settings)
+### 9.4 Cargar clases y eventos académicos
 
-Después del onboarding, ir a `/settings` para agregar:
-- Clases fijas por día de la semana
-- Fechas de parciales, TPs y exámenes
+Después del onboarding, completar la configuración:
+
+| Ruta | Qué cargar |
+|------|------------|
+| `/cursada` | Clases fijas por día de la semana y materia |
+| `/cuatrimestres` | Verificar que el cuatrimestre activo está correcto |
+| En detalle de materia (`/subjects/[id]`) | Parciales, TPs, fechas importantes |
 
 ---
 
@@ -530,6 +541,18 @@ Este error aparece durante el build de Vercel y **no es un error real** — es s
 
 ---
 
+### El check-in no muestra el paso de "Trabajo"
+
+Este es el comportamiento esperado si el usuario marcó que no trabaja durante el onboarding (campo `is_employed = false` en `user_config`). Para restaurar el paso: ir a `/trabajo` y activar la opción de empleo.
+
+---
+
+### El selector de materias en el check-in está vacío
+
+Si en el paso "Facultad" aparece un input de texto en lugar de chips, significa que el usuario no tiene materias cargadas. Completar el onboarding o ir a `/cuatrimestres` y agregar materias al cuatrimestre activo.
+
+---
+
 ### El plan IA no incluye bloques de viaje
 Verificar que el check-in del día tiene `travel_route_json` con al menos un elemento. Los bloques de viaje son determinísticos: si el array está vacío, no se generan. Hacer un nuevo check-in con la ruta de viaje completa.
 
@@ -586,6 +609,11 @@ En iOS la instalación PWA solo funciona desde **Safari** (no Chrome ni Firefox)
 | `supabase/migrations_v4.sql` | `class_logs` con topics_covered_json |
 | `supabase/migrations_v5.sql` | `class_logs.due_date` — fecha de entrega de tareas |
 | `supabase/migrations_v6.sql` | `push_subscriptions`, `user_config.is_employed`, dedup notifications |
+| `supabase/migrations_v9.sql` | Smart deadline alerts: columnas adicionales en `notifications` |
+| `worker/index.js` | Código de service worker custom (push handler) — mergeado por next-pwa |
+| `app/api/push/subscribe/route.ts` | API: guardar/eliminar suscripción push del dispositivo |
+| `app/api/push/send/route.ts` | API: enviar push via web-push (interno) |
+| `components/features/NotificationCenter.tsx` | Centro de notificaciones: campanita + panel bottom-sheet |
 | `public/push-sw.js` | Service worker para notificaciones push |
 | `lib/push.ts` | Helpers para enviar notificaciones push via `web-push` |
 | `hooks/usePushNotifications.ts` | Hook client-side para gestionar suscripción push |

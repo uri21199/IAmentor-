@@ -10,7 +10,8 @@ import { ProgressBar } from '@/components/ui/ProgressBar'
 import Button from '@/components/ui/Button'
 import { getGreeting, blockTypeColor, blockTypeIcon } from '@/lib/utils'
 import { getDaysColor as getColor } from '@/lib/study-priority'
-import type { CheckIn, DailyPlan, TimeBlock as TimeBlockType } from '@/types'
+import PomodoroFocus from '@/components/features/PomodoroFocus'
+import type { CheckIn, DailyPlan, TimeBlock as TimeBlockType, TopicComprehension } from '@/types'
 
 // ── Subject/unit/topic hierarchy for the edit modal ──────────────────────────
 interface TopicOption { id: string; name: string; status: string }
@@ -46,7 +47,7 @@ function blockTop(startTime: string): number {
 
 function blockHeight(startTime: string, endTime: string): number {
   const dur = timeToMinutes(endTime) - timeToMinutes(startTime)
-  return Math.max(28, dur * (HOUR_PX / 60))
+  return Math.max(20, dur * (HOUR_PX / 60))
 }
 
 // ── Column assignment for overlapping blocks ──────────────────────────────────
@@ -119,6 +120,19 @@ export default function TodayClient({
   const [generating, setGenerating] = useState(false)
   const [completion, setCompletion] = useState(plan?.completion_percentage || 0)
   const [upcomingExpanded, setUpcomingExpanded] = useState(false)
+
+  // ── Drag & drop state ────────────────────────────────────────────────────
+  const [draggingBlock, setDraggingBlock] = useState<{
+    id: string
+    startY: number
+    origStartMins: number
+    origDuration: number
+    curStartMins: number
+  } | null>(null)
+  const dragMovedRef = useRef(false)
+
+  // ── Pomodoro state ────────────────────────────────────────────────────────
+  const [pomodoroBlock, setPomodoroBlock] = useState<TimeBlockType | null>(null)
 
   // ── Block editing state ───────────────────────────────────────────────────
   const [editingBlock, setEditingBlock]     = useState<TimeBlockType | null>(null)
@@ -269,6 +283,71 @@ export default function TodayClient({
 
   const selectedSubjectUnits = subjectsData.find(s => s.id === editSubjectId)?.units ?? []
 
+  // ── Pomodoro handlers ─────────────────────────────────────────────────────
+  async function handlePomodoroComplete(status: TopicComprehension) {
+    if (!pomodoroBlock) return
+    // Mark the block as completed in the plan (topic status was already saved
+    // inside PomodoroFocus before this callback fires)
+    await toggleBlock(pomodoroBlock.id, true)
+    setPomodoroBlock(null)
+  }
+
+  function handlePomodoroAbandon() {
+    setPomodoroBlock(null)
+  }
+
+  // Lookup helpers for the active pomodoro block
+  const pomodoroSubject = pomodoroBlock
+    ? subjectsData.find(s => s.id === pomodoroBlock.subject_id)
+    : undefined
+  const pomodoroTopic = pomodoroSubject
+    ? pomodoroSubject.units.flatMap(u => u.topics).find(t => t.id === pomodoroBlock?.topic_id)
+    : undefined
+
+  // ── Drag & drop handlers ──────────────────────────────────────────────────
+  function handleDragStart(e: React.PointerEvent, block: TimeBlockType) {
+    e.currentTarget.setPointerCapture(e.pointerId)
+    dragMovedRef.current = false
+    setDraggingBlock({
+      id: block.id,
+      startY: e.clientY,
+      origStartMins: timeToMinutes(block.start_time),
+      origDuration: timeToMinutes(block.end_time) - timeToMinutes(block.start_time),
+      curStartMins: timeToMinutes(block.start_time),
+    })
+  }
+
+  function handleDragMove(e: React.PointerEvent) {
+    if (!draggingBlock) return
+    const deltaY = e.clientY - draggingBlock.startY
+    if (Math.abs(deltaY) > 5) dragMovedRef.current = true
+    const rawDeltaMins = (deltaY * 60) / HOUR_PX
+    const snappedDeltaMins = Math.round(rawDeltaMins / 15) * 15
+    const newStart = Math.max(
+      GRID_START * 60,
+      Math.min(GRID_END * 60 - draggingBlock.origDuration, draggingBlock.origStartMins + snappedDeltaMins)
+    )
+    if (newStart !== draggingBlock.curStartMins) {
+      setDraggingBlock(prev => prev ? { ...prev, curStartMins: newStart } : null)
+    }
+  }
+
+  function handleDragEnd() {
+    if (!draggingBlock) return
+    if (dragMovedRef.current) {
+      const pad = (n: number) =>
+        `${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`
+      const newStart = pad(draggingBlock.curStartMins)
+      const newEnd   = pad(draggingBlock.curStartMins + draggingBlock.origDuration)
+      const updated = blocks
+        .map(b => b.id === draggingBlock.id ? { ...b, start_time: newStart, end_time: newEnd } : b)
+        .sort((a, b) => a.start_time.localeCompare(b.start_time))
+      setBlocks(updated)
+      persistBlocks(updated)
+    }
+    setDraggingBlock(null)
+  }
+
   // ── Current time indicator ────────────────────────────────────────────────
   const now = new Date()
   const currentTimePx = ((now.getHours() * 60 + now.getMinutes() - GRID_START * 60) * HOUR_PX) / 60
@@ -412,24 +491,32 @@ export default function TodayClient({
 
             {/* Time blocks */}
             {displayBlocksWithCols.map(block => {
-              const top    = blockTop(block.start_time)
+              const isBeingDragged = draggingBlock?.id === block.id
+              const displayStartMins = isBeingDragged ? draggingBlock!.curStartMins : timeToMinutes(block.start_time)
+              const top    = Math.max(0, (displayStartMins - GRID_START * 60)) * (HOUR_PX / 60)
               const height = blockHeight(block.start_time, block.end_time)
               const style  = BLOCK_STYLE[block.type] ?? BLOCK_STYLE.free
               const isPreview = !checkin
               // Column-aware positioning (left-11 = 2.75rem)
+              // Column layout with 3px gap between overlapping blocks
+              const gap = block.totalCols > 1 ? 3 : 0
               const leftVal  = block.totalCols > 1
-                ? `calc(2.75rem + (100% - 2.75rem) * ${block.col / block.totalCols})`
+                ? `calc(2.75rem + (100% - 2.75rem) * ${block.col / block.totalCols} + ${block.col > 0 ? gap : 0}px)`
                 : '2.75rem'
               const rightVal = block.totalCols > 1
-                ? `calc((100% - 2.75rem) * ${(block.totalCols - block.col - 1) / block.totalCols} + 1px)`
+                ? `calc((100% - 2.75rem) * ${(block.totalCols - block.col - 1) / block.totalCols} + ${block.col < block.totalCols - 1 ? gap : 0}px)`
                 : '0px'
 
               return (
                 <button
                   key={block.id}
-                  onClick={() => !isPreview && openEdit(block)}
-                  className={`absolute rounded-2xl border px-2.5 py-1.5 text-left transition-all active:scale-[0.98] ${style.bg} ${style.border} ${isPreview ? 'opacity-60 pointer-events-none' : ''} ${block.completed ? 'opacity-40' : ''}`}
-                  style={{ top: `${top}px`, height: `${height}px`, minHeight: '28px', left: leftVal, right: rightVal }}
+                  onPointerDown={!isPreview ? e => handleDragStart(e, block) : undefined}
+                  onPointerMove={!isPreview ? handleDragMove : undefined}
+                  onPointerUp={!isPreview ? handleDragEnd : undefined}
+                  onPointerCancel={!isPreview ? handleDragEnd : undefined}
+                  onClick={() => !isPreview && !dragMovedRef.current && openEdit(block)}
+                  className={`absolute rounded-2xl border px-2.5 py-1.5 text-left ${style.bg} ${style.border} ${isPreview ? 'opacity-60 pointer-events-none' : ''} ${block.completed && !isBeingDragged ? 'opacity-40' : ''} ${isBeingDragged ? 'shadow-xl z-10 scale-[1.02]' : 'transition-all active:scale-[0.98]'}`}
+                  style={{ top: `${top}px`, height: `${height}px`, minHeight: '20px', left: leftVal, right: rightVal, touchAction: 'none', cursor: isBeingDragged ? 'grabbing' : 'grab' }}
                 >
                   <div className="flex items-start gap-1.5 h-full overflow-hidden">
                     <div className={`w-1.5 h-1.5 rounded-full shrink-0 mt-1 ${style.dot}`} />
@@ -448,6 +535,24 @@ export default function TodayClient({
                         </p>
                       )}
                     </div>
+                    {/* Focus button — study blocks only, not completed */}
+                    {!isPreview && block.type === 'study' && !block.completed && (
+                      <div
+                        onPointerDown={e => e.stopPropagation()}
+                        onClick={e => { e.stopPropagation(); setPomodoroBlock(block) }}
+                        className="shrink-0 w-5 h-5 rounded-full flex items-center justify-center mt-0.5 mr-0.5"
+                        style={{
+                          backgroundColor: 'rgba(139,92,246,0.25)',
+                          border: '1px solid rgba(139,92,246,0.45)',
+                        }}
+                        title="Iniciar foco"
+                      >
+                        <svg className="w-2.5 h-2.5 ml-px" fill="#A78BFA" viewBox="0 0 24 24">
+                          <path d="M8 5v14l11-7z" />
+                        </svg>
+                      </div>
+                    )}
+
                     {/* Completion dot */}
                     {!isPreview && (
                       <div
@@ -517,6 +622,22 @@ export default function TodayClient({
             )}
           </div>
         </div>
+      )}
+
+      {/* ── Pomodoro fullscreen overlay ───────────────────────────────────────── */}
+      {pomodoroBlock && (
+        <PomodoroFocus
+          blockId={pomodoroBlock.id}
+          subjectId={pomodoroBlock.subject_id}
+          topicId={pomodoroBlock.topic_id}
+          subjectName={pomodoroSubject?.name}
+          subjectColor={pomodoroSubject?.color}
+          topicName={pomodoroTopic?.name}
+          userId={user.id}
+          planDate={today}
+          onComplete={handlePomodoroComplete}
+          onAbandon={handlePomodoroAbandon}
+        />
       )}
 
       {/* ── Edit block modal ──────────────────────────────────────────────────── */}

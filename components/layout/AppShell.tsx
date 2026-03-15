@@ -3,16 +3,20 @@
 import { useState } from 'react'
 import { usePathname } from 'next/navigation'
 import SideDrawer from './SideDrawer'
+import NotificationCenter from '@/components/features/NotificationCenter'
 
 const PAGE_TITLES: Record<string, string> = {
-  '/today':    'Hoy',
-  '/checkin':  'Check-in',
-  '/subjects': 'Materias',
-  '/gym':      'Gym',
-  '/stats':    'Estadísticas',
-  '/settings': 'Configuración',
-  '/agenda':   'Agenda',
-  '/calendar': 'Calendario',
+  '/today':          'Hoy',
+  '/checkin':        'Check-in',
+  '/subjects':       'Materias',
+  '/gym':            'Gym',
+  '/stats':          'Estadísticas',
+  '/trabajo':        'Horario laboral',
+  '/cursada':        'Cursada',
+  '/cuatrimestres':  'Cuatrimestres',
+  '/settings':       'Configuración',
+  '/agenda':         'Agenda',
+  '/calendar':       'Calendario',
 }
 
 interface AppShellProps {
@@ -48,7 +52,8 @@ export default function AppShell({ children, userEmail }: AppShellProps) {
               <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
             </svg>
           </button>
-          <h1 className="text-base font-semibold text-text-primary">{title}</h1>
+          <h1 className="flex-1 text-base font-semibold text-text-primary">{title}</h1>
+          <NotificationCenter />
         </div>
       </header>
 

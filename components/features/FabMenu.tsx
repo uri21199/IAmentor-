@@ -104,6 +104,7 @@ function PostClaseModal({ subjectsData, userId, onClose }: { subjectsData: Subje
   const today = getTodayArg()
 
   const [subjectId, setSubjectId] = useState('')
+  const [selectedUnitId, setSelectedUnitId] = useState('')
   const [topicIds, setTopicIds] = useState<string[]>([])
   const [understanding, setUnderstanding] = useState(3)
   const [hasHomework, setHasHomework] = useState(false)
@@ -111,10 +112,9 @@ function PostClaseModal({ subjectsData, userId, onClose }: { subjectsData: Subje
   const [dueDate, setDueDate] = useState('')
   const [saving, setSaving] = useState(false)
   const [success, setSuccess] = useState(false)
-  // Units collapsed state — all start collapsed
-  const [collapsedUnits, setCollapsedUnits] = useState<Record<string, boolean>>({})
 
   const selectedSubject = subjectsData.find(s => s.id === subjectId)
+  const selectedUnit = selectedSubject?.units.find(u => u.id === selectedUnitId)
 
   function toggleTopic(id: string) {
     setTopicIds(prev => prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id])
@@ -122,12 +122,8 @@ function PostClaseModal({ subjectsData, userId, onClose }: { subjectsData: Subje
 
   function handleSubjectChange(id: string) {
     setSubjectId(id)
+    setSelectedUnitId('')
     setTopicIds([])
-    // Collapse all units when subject changes
-    const newSubject = subjectsData.find(s => s.id === id)
-    if (newSubject) {
-      setCollapsedUnits(Object.fromEntries(newSubject.units.map(u => [u.id, true])))
-    }
   }
 
   async function save() {
@@ -194,8 +190,29 @@ function PostClaseModal({ subjectsData, userId, onClose }: { subjectsData: Subje
             </div>
           </div>
 
-          {/* Topics covered — grouped by unit, all collapsed by default */}
+          {/* Unit selector */}
           {subjectId && selectedSubject && selectedSubject.units.some(u => u.topics.length > 0) && (
+            <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden">
+              <div className="flex items-center gap-3 px-4 py-3">
+                <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                </svg>
+                <select
+                  value={selectedUnitId}
+                  onChange={e => { setSelectedUnitId(e.target.value); setTopicIds([]) }}
+                  className="flex-1 bg-transparent text-sm text-text-primary focus:outline-none"
+                >
+                  <option value="">Seleccionar unidad</option>
+                  {selectedSubject.units.filter(u => u.topics.length > 0).map(u => (
+                    <option key={u.id} value={u.id}>{u.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+
+          {/* Topic multi-select (filtered to selected unit) */}
+          {selectedUnit && selectedUnit.topics.length > 0 && (
             <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden">
               <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
                 <p className="text-xs font-medium text-text-secondary">Temas vistos en clase</p>
@@ -203,48 +220,23 @@ function PostClaseModal({ subjectsData, userId, onClose }: { subjectsData: Subje
                   <span className="text-xs text-primary font-medium">{topicIds.length} seleccionado{topicIds.length !== 1 ? 's' : ''}</span>
                 )}
               </div>
-              {selectedSubject.units.filter(u => u.topics.length > 0).map((unit, uIdx, arr) => {
-                const isCollapsed = collapsedUnits[unit.id] ?? true
-                const selectedInUnit = unit.topics.filter(t => topicIds.includes(t.id)).length
-                return (
-                  <div key={unit.id} className={uIdx > 0 ? 'border-t border-border-subtle' : ''}>
+              <div className="px-4 py-3">
+                <div className="flex flex-wrap gap-2">
+                  {selectedUnit.topics.map(t => (
                     <button
-                      onClick={() => setCollapsedUnits(p => ({ ...p, [unit.id]: !p[unit.id] }))}
-                      className="w-full flex items-center justify-between px-4 py-2.5"
+                      key={t.id}
+                      onClick={() => toggleTopic(t.id)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-medium border transition-all ${
+                        topicIds.includes(t.id)
+                          ? 'border-primary bg-primary/20 text-text-primary'
+                          : 'border-border-subtle bg-surface text-text-secondary'
+                      }`}
                     >
-                      <p className="text-xs font-semibold text-text-secondary uppercase tracking-wider truncate max-w-[60%]">{unit.name}</p>
-                      <div className="flex items-center gap-2">
-                        {selectedInUnit > 0 && (
-                          <span className="text-xs text-primary font-medium">{selectedInUnit} ✓</span>
-                        )}
-                        <span className="text-xs text-text-secondary">{unit.topics.length}</span>
-                        <svg className={`w-3.5 h-3.5 text-text-secondary transition-transform ${isCollapsed ? '' : 'rotate-180'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </div>
+                      {topicIds.includes(t.id) ? '✓ ' : ''}{t.name}
                     </button>
-                    {!isCollapsed && (
-                      <div className="px-4 pb-3">
-                        <div className="flex flex-wrap gap-2">
-                          {unit.topics.map(t => (
-                            <button
-                              key={t.id}
-                              onClick={() => toggleTopic(t.id)}
-                              className={`px-3 py-1.5 rounded-xl text-xs font-medium border transition-all ${
-                                topicIds.includes(t.id)
-                                  ? 'border-primary bg-primary/20 text-text-primary'
-                                  : 'border-border-subtle bg-surface text-text-secondary'
-                              }`}
-                            >
-                              {topicIds.includes(t.id) ? '✓ ' : ''}{t.name}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
+                  ))}
+                </div>
+              </div>
             </div>
           )}
 
@@ -334,6 +326,7 @@ function EventoModal({ subjectsData, userId, onClose }: { subjectsData: SubjectO
   const [title, setTitle] = useState('')
   const [type, setType] = useState<string>('parcial')
   const [subjectId, setSubjectId] = useState('')
+  const [selectedUnitId, setSelectedUnitId] = useState('')
   const [date, setDate] = useState('')
   const [time, setTime] = useState('')
   const [aula, setAula] = useState('')
@@ -344,7 +337,7 @@ function EventoModal({ subjectsData, userId, onClose }: { subjectsData: SubjectO
 
   const isAcademic = ['parcial', 'parcial_intermedio', 'entrega_tp'].includes(type)
   const selectedSubject = subjectsData.find(s => s.id === subjectId)
-  const allTopics = selectedSubject?.units.flatMap(u => u.topics) ?? []
+  const selectedUnit = selectedSubject?.units.find(u => u.id === selectedUnitId)
 
   function toggleTopic(id: string) {
     setTopicIds(prev => prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id])
@@ -404,7 +397,7 @@ function EventoModal({ subjectsData, userId, onClose }: { subjectsData: SubjectO
               </svg>
               <select
                 value={type}
-                onChange={e => { setType(e.target.value); if (!['parcial','parcial_intermedio','entrega_tp'].includes(e.target.value)) setSubjectId('') }}
+                onChange={e => { setType(e.target.value); if (!['parcial','parcial_intermedio','entrega_tp'].includes(e.target.value)) { setSubjectId(''); setSelectedUnitId(''); setTopicIds([]) } }}
                 className="flex-1 bg-transparent text-sm text-text-primary focus:outline-none"
               >
                 {EVENT_TYPES.map(et => (
@@ -466,7 +459,7 @@ function EventoModal({ subjectsData, userId, onClose }: { subjectsData: SubjectO
                 </svg>
                 <select
                   value={subjectId}
-                  onChange={e => { setSubjectId(e.target.value); setTopicIds([]) }}
+                  onChange={e => { setSubjectId(e.target.value); setSelectedUnitId(''); setTopicIds([]) }}
                   className="flex-1 bg-transparent text-sm text-text-primary focus:outline-none"
                 >
                   <option value="">Materia (opcional)</option>
@@ -478,22 +471,48 @@ function EventoModal({ subjectsData, userId, onClose }: { subjectsData: SubjectO
             </div>
           )}
 
-          {/* Related topics */}
-          {isAcademic && subjectId && allTopics.length > 0 && (
-            <div className="rounded-2xl bg-surface-2 border border-border-subtle p-4">
-              <p className="text-xs text-text-secondary mb-2.5">Temas relacionados</p>
-              <div className="flex flex-wrap gap-2">
-                {allTopics.map(t => (
+          {/* Unit selector (academic + subject selected) */}
+          {isAcademic && subjectId && selectedSubject && selectedSubject.units.some(u => u.topics.length > 0) && (
+            <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden">
+              <div className="flex items-center gap-3 px-4 py-3">
+                <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                </svg>
+                <select
+                  value={selectedUnitId}
+                  onChange={e => { setSelectedUnitId(e.target.value); setTopicIds([]) }}
+                  className="flex-1 bg-transparent text-sm text-text-primary focus:outline-none"
+                >
+                  <option value="">Unidad (opcional)</option>
+                  {selectedSubject.units.filter(u => u.topics.length > 0).map(u => (
+                    <option key={u.id} value={u.id}>{u.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+
+          {/* Topic multi-select (filtered to selected unit) */}
+          {isAcademic && selectedUnit && selectedUnit.topics.length > 0 && (
+            <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
+                <p className="text-xs font-medium text-text-secondary">Temas del parcial</p>
+                {topicIds.length > 0 && (
+                  <span className="text-xs text-primary font-medium">{topicIds.length} seleccionado{topicIds.length !== 1 ? 's' : ''}</span>
+                )}
+              </div>
+              <div className="px-4 py-3 flex flex-wrap gap-2">
+                {selectedUnit.topics.map(t => (
                   <button
                     key={t.id}
                     onClick={() => toggleTopic(t.id)}
                     className={`px-3 py-1.5 rounded-xl text-xs font-medium border transition-all ${
                       topicIds.includes(t.id)
-                        ? 'border-primary bg-primary/20 text-primary'
+                        ? 'border-primary bg-primary/20 text-text-primary'
                         : 'border-border-subtle bg-surface text-text-secondary'
                     }`}
                   >
-                    {t.status === 'green' ? '🟢' : t.status === 'yellow' ? '🟡' : '🔴'} {t.name}
+                    {topicIds.includes(t.id) ? '✓ ' : ''}{t.name}
                   </button>
                 ))}
               </div>
