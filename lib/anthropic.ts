@@ -48,7 +48,10 @@ export async function generateDailyPlan(
 
   const fixedBlocksStr = fixed_blocks.length > 0
     ? fixed_blocks
-        .map(b => `  - ${b.start_time}–${b.end_time}: ${b.title} (tipo: ${b.type})`)
+        .map(b => {
+          const tag = b.manually_edited ? ' ⚠️ EDITADO MANUALMENTE — NO modificar' : ''
+          return `  - ${b.start_time}–${b.end_time}: ${b.title} (tipo: ${b.type})${tag}`
+        })
         .join('\n')
     : '  (ninguno)'
 
@@ -66,6 +69,7 @@ IMPORTANTE: NO uses horarios de EE.UU. (cena 18–19hs, almuerzo antes de las 12
 ## BLOQUES FIJOS (ya están agendados — NO los incluyas en tu respuesta)
 ${fixedBlocksStr}
 IMPORTANTE: NO generes bloques que se superpongan con los bloques fijos. Solo generá bloques para los huecos disponibles.
+Los bloques marcados con ⚠️ EDITADO MANUALMENTE fueron modificados por el usuario y NO deben reemplazarse ni modificarse bajo ninguna circunstancia.
 
 ## DATOS DEL CHECK-IN
 - Calidad de sueño: ${checkin.sleep_quality}/5
@@ -150,6 +154,11 @@ export async function replanDay(
     ? `- Imprevistos del día (registrados al inicio): ${context.unexpected_events}`
     : ''
 
+  const lockedBlocks = currentPlan
+    .filter(b => b.manually_edited && !b.deleted)
+    .map(b => `  - ${b.start_time}–${b.end_time}: ${b.title}`)
+    .join('\n') || '  (ninguno)'
+
   const prompt = `Eres un mentor de productividad. El usuario necesita reorganizar su plan del día.
 
 ## PLAN ACTUAL (${todayDisplay})
@@ -165,14 +174,19 @@ ${change}
 - Estrés: ${context.stress_level}
 ${unexpectedContext}
 
+## BLOQUES EDITADOS MANUALMENTE (NO modificar bajo ninguna circunstancia)
+Los siguientes bloques fueron editados manualmente por el usuario y NO deben modificarse ni reemplazarse:
+${lockedBlocks}
+
 ## INSTRUCCIONES
 1. Mantené los bloques ya completados (completed: true) sin cambios
-2. Solo reorganizá los bloques pendientes a partir de ${now}
-3. El "CAMBIO REPORTADO" es lo más importante: ajustá el plan para accommodarlo, incluso si implica reducir la intensidad o eliminar bloques
-4. Si el cambio indica cansancio/estrés/imprevistos, reducí la intensidad de los bloques restantes
-5. Respetá los imprevistos del día ya registrados al inicio (si los hay) al generar los bloques
-6. Respondé ÚNICAMENTE con el JSON array completo (incluyendo bloques ya completados)
-7. No uses markdown ni explicaciones`
+2. Mantené los bloques con manually_edited: true EXACTAMENTE como están (título, descripción, horario)
+3. Solo reorganizá los bloques pendientes a partir de ${now}
+4. El "CAMBIO REPORTADO" es lo más importante: ajustá el plan para accommodarlo, incluso si implica reducir la intensidad o eliminar bloques
+5. Si el cambio indica cansancio/estrés/imprevistos, reducí la intensidad de los bloques restantes
+6. Respetá los imprevistos del día ya registrados al inicio (si los hay) al generar los bloques
+7. Respondé ÚNICAMENTE con el JSON array completo (incluyendo bloques ya completados, editados manualmente, y eliminados — todos deben aparecer)
+8. No uses markdown ni explicaciones`
 
   const message = await anthropic.messages.create({
     model: 'claude-sonnet-4-5',

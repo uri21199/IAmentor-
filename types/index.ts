@@ -97,6 +97,8 @@ export interface TimeBlock {
   travel_segment?: TravelSegment
   completed: boolean
   priority?: 'low' | 'medium' | 'high' | 'exam'
+  manually_edited?: boolean  // true when user manually edited title/desc/time
+  deleted?: boolean          // soft-delete: keeps time slot free, AI won't regenerate
 }
 
 export interface DailyPlan {

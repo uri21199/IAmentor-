@@ -4,7 +4,7 @@ import { useState } from 'react'
 import {
   format, parseISO, startOfMonth, endOfMonth, eachDayOfInterval,
   isSameDay, addMonths, subMonths, getDay,
-  differenceInDays, isToday,
+  differenceInDays, isToday, startOfDay,
 } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { createClient } from '@/lib/supabase'
@@ -249,7 +249,7 @@ export default function CalendarClient({ events: initialEvents, today, userId, s
 
             const urgentColor = hasEvents
               ? dayEvents.reduce<string>((worst, ev) => {
-                  const d = differenceInDays(parseISO(ev.date), new Date())
+                  const d = differenceInDays(parseISO(ev.date), startOfDay(new Date()))
                   const c = getDaysColor(d)
                   if (c === 'red') return 'red'
                   if (c === 'amber' && worst !== 'red') return 'amber'
@@ -312,7 +312,7 @@ export default function CalendarClient({ events: initialEvents, today, userId, s
             <div className="rounded-3xl bg-surface-2 border border-border-subtle overflow-hidden">
               {selectedEvents.map((ev, i) => {
                 const extra  = parseNotes(ev.notes)
-                const days   = differenceInDays(parseISO(ev.date), new Date())
+                const days   = differenceInDays(parseISO(ev.date), startOfDay(new Date()))
                 const isLast = i === selectedEvents.length - 1
 
                 return (

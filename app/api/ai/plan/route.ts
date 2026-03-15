@@ -118,8 +118,22 @@ export async function POST() {
       }
     }
 
-    // ── 5. Fixed blocks from user_config + class_schedule ───
-    const fixedBlocks: TimeBlock[] = []
+    // ── 5. Manually-edited blocks from existing plan ────────
+    // These must survive regeneration: they are merged in as fixed blocks
+    // so Claude generates around them and they are included in the final plan.
+    const { data: existingPlan } = await supabase
+      .from('daily_plans')
+      .select('plan_json, completion_percentage')
+      .eq('user_id', user.id)
+      .eq('date', today)
+      .single()
+
+    const manuallyEditedBlocks: TimeBlock[] = (existingPlan?.plan_json ?? [])
+      .filter((b: TimeBlock) => b.manually_edited && !b.deleted)
+
+    // ── 5b. Fixed blocks from user_config + class_schedule ──
+    // Start with manually-edited blocks so the AI respects their slots
+    const fixedBlocks: TimeBlock[] = [...manuallyEditedBlocks]
 
     const [{ data: userConfig }, { data: todayClasses }] = await Promise.all([
       supabase.from('user_config').select('*').eq('user_id', user.id).single(),
@@ -245,11 +259,13 @@ export async function POST() {
     )
 
     // ── 9. Save plan to DB ──────────────────────────────────
+    // Preserve existing completion_percentage (so completed blocks survive regeneration)
+    const existingCompletion = existingPlan?.completion_percentage ?? 0
     await supabase.from('daily_plans').upsert({
       user_id: user.id,
       date: today,
       plan_json: allBlocks,
-      completion_percentage: 0,
+      completion_percentage: existingCompletion,
     })
 
     return NextResponse.json({ blocks: allBlocks })

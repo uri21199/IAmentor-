@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import Link from 'next/link'
-import { format, parseISO, differenceInDays } from 'date-fns'
+import { format, parseISO, differenceInDays, startOfDay } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { createClient } from '@/lib/supabase'
 import { Badge } from '@/components/ui/Badge'
@@ -120,6 +120,7 @@ export default function TodayClient({
   const [generating, setGenerating] = useState(false)
   const [completion, setCompletion] = useState(plan?.completion_percentage || 0)
   const [upcomingExpanded, setUpcomingExpanded] = useState(false)
+  const [now, setNow] = useState<Date | null>(null)
 
   // ── Drag & drop state ────────────────────────────────────────────────────
   const [draggingBlock, setDraggingBlock] = useState<{
@@ -156,6 +157,13 @@ export default function TodayClient({
     gridRef.current.scrollTop = Math.max(0, topPx - 80)
   }, [])
 
+  // ── Client-side clock (avoids UTC mismatch from SSR) ─────────────────────
+  useEffect(() => {
+    setNow(new Date())
+    const interval = setInterval(() => setNow(new Date()), 60_000)
+    return () => clearInterval(interval)
+  }, [])
+
   // ── Auto-replan ───────────────────────────────────────────────────────────
   useEffect(() => {
     if (actionParam === 'replan' && blocks.length > 0) handleReplan()
@@ -178,8 +186,9 @@ export default function TodayClient({
 
   // ── Persist ───────────────────────────────────────────────────────────────
   async function persistBlocks(updated: TimeBlockType[]) {
-    const pct = updated.length > 0
-      ? Math.round((updated.filter(b => b.completed).length / updated.length) * 100)
+    const active = updated.filter(b => !b.deleted)
+    const pct = active.length > 0
+      ? Math.round((active.filter(b => b.completed).length / active.length) * 100)
       : 0
     setCompletion(pct)
     await fetch('/api/plan/update-block', {
@@ -222,13 +231,9 @@ export default function TodayClient({
   }
 
   async function deleteBlock(id: string) {
-    const idx = blocks.findIndex(b => b.id === id)
-    if (idx < 0) return
-    const deletedStart = blocks[idx].start_time
-    let updated = blocks.filter(b => b.id !== id)
-    if (idx < updated.length) {
-      updated = updated.map((b, i) => i === idx ? { ...b, start_time: deletedStart } : b)
-    }
+    // Soft-delete: mark deleted so the time slot shows as free space,
+    // other blocks don't shift, and the AI won't regenerate this slot.
+    const updated = blocks.map(b => b.id === id ? { ...b, deleted: true } : b)
     setBlocks(updated)
     setEditingBlock(null)
     await persistBlocks(updated)
@@ -253,7 +258,7 @@ export default function TodayClient({
 
       let updated = blocks.map(b =>
         b.id === editingBlock.id
-          ? { ...b, title: editTitle, description: editDesc, subject_id: editSubjectId || undefined, topic_id: editTopicId || undefined, start_time: editStartTime, end_time: editEndTime }
+          ? { ...b, title: editTitle, description: editDesc, subject_id: editSubjectId || undefined, topic_id: editTopicId || undefined, start_time: editStartTime, end_time: editEndTime, manually_edited: true }
           : b
       )
 
@@ -348,13 +353,16 @@ export default function TodayClient({
     setDraggingBlock(null)
   }
 
-  // ── Current time indicator ────────────────────────────────────────────────
-  const now = new Date()
-  const currentTimePx = ((now.getHours() * 60 + now.getMinutes() - GRID_START * 60) * HOUR_PX) / 60
-  const showCurrentTime = now.getHours() >= GRID_START && now.getHours() < GRID_END
+  // ── Current time indicator (now is client-only to avoid SSR UTC offset) ──
+  const currentTimePx = now
+    ? ((now.getHours() * 60 + now.getMinutes() - GRID_START * 60) * HOUR_PX) / 60
+    : -1
+  const showCurrentTime = now
+    ? now.getHours() >= GRID_START && now.getHours() < GRID_END
+    : false
 
   // ── Render ────────────────────────────────────────────────────────────────
-  const displayBlocks = checkin ? blocks : previewBlocks
+  const displayBlocks = checkin ? blocks.filter(b => !b.deleted) : previewBlocks
   const displayBlocksWithCols = computeColumns(displayBlocks)
 
   return (
@@ -515,11 +523,16 @@ export default function TodayClient({
                   onPointerUp={!isPreview ? handleDragEnd : undefined}
                   onPointerCancel={!isPreview ? handleDragEnd : undefined}
                   onClick={() => !isPreview && !dragMovedRef.current && openEdit(block)}
-                  className={`absolute rounded-2xl border px-2.5 py-1.5 text-left ${style.bg} ${style.border} ${isPreview ? 'opacity-60 pointer-events-none' : ''} ${block.completed && !isBeingDragged ? 'opacity-40' : ''} ${isBeingDragged ? 'shadow-xl z-10 scale-[1.02]' : 'transition-all active:scale-[0.98]'}`}
+                  className={`absolute rounded-2xl border px-2.5 py-1.5 text-left ${style.bg} ${style.border} ${block.manually_edited ? 'ring-1 ring-amber-400/50' : ''} ${isPreview ? 'opacity-60 pointer-events-none' : ''} ${block.completed && !isBeingDragged ? 'opacity-40' : ''} ${isBeingDragged ? 'shadow-xl z-10 scale-[1.02]' : 'transition-all active:scale-[0.98]'}`}
                   style={{ top: `${top}px`, height: `${height}px`, minHeight: '20px', left: leftVal, right: rightVal, touchAction: 'none', cursor: isBeingDragged ? 'grabbing' : 'grab' }}
                 >
                   <div className="flex items-start gap-1.5 h-full overflow-hidden">
                     <div className={`w-1.5 h-1.5 rounded-full shrink-0 mt-1 ${style.dot}`} />
+                    {block.manually_edited && (
+                      <svg className="w-2.5 h-2.5 text-amber-400 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/>
+                      </svg>
+                    )}
                     <div className="flex-1 min-w-0 overflow-hidden">
                       <p className={`text-xs font-semibold leading-tight truncate ${style.text} ${block.completed ? 'line-through' : ''}`}>
                         {block.title}
@@ -593,7 +606,7 @@ export default function TodayClient({
 
           <div className="rounded-3xl bg-surface-2 border border-border-subtle overflow-hidden">
             {(upcomingExpanded ? upcomingEvents : upcomingEvents.slice(0, 3)).map((event: any, i: number, arr: any[]) => {
-              const days  = differenceInDays(parseISO(event.date), new Date())
+              const days  = differenceInDays(parseISO(event.date), startOfDay(new Date()))
               const color = getColor(days)
               const isLast = i === arr.length - 1
               return (
