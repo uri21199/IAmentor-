@@ -17,6 +17,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/settings':       'Configuración',
   '/agenda':         'Agenda',
   '/calendar':       'Calendario',
+  '/notifications':  'Notificaciones',
 }
 
 interface AppShellProps {
@@ -25,7 +26,8 @@ interface AppShellProps {
 }
 
 export default function AppShell({ children, userEmail }: AppShellProps) {
-  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [drawerOpen, setDrawerOpen]           = useState(false)
+  const [notifUnreadCount, setNotifUnreadCount] = useState(0)
   const pathname = usePathname()
 
   const title = Object.entries(PAGE_TITLES).find(([k]) =>
@@ -38,6 +40,7 @@ export default function AppShell({ children, userEmail }: AppShellProps) {
         isOpen={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         userEmail={userEmail}
+        notificationUnreadCount={notifUnreadCount}
       />
 
       {/* Top bar */}
@@ -53,7 +56,7 @@ export default function AppShell({ children, userEmail }: AppShellProps) {
             </svg>
           </button>
           <h1 className="flex-1 text-base font-semibold text-text-primary">{title}</h1>
-          <NotificationCenter />
+          <NotificationCenter onUnreadCountChange={setNotifUnreadCount} />
         </div>
       </header>
 
