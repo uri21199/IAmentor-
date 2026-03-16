@@ -275,6 +275,7 @@ export async function POST() {
             send('update_block', { id: ev.travel_block_id, micro_review: ev.micro_review })
           } else {
             const block = item as TimeBlock
+            if (!block.id) block.id = `block_${claudeBlocks.length + 1}`
             claudeBlocks.push(block)
             send('block', block)
           }

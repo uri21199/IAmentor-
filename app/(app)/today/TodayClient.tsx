@@ -559,7 +559,7 @@ export default function TodayClient({
 
             {/* Time blocks */}
             {displayBlocksWithCols.map(block => {
-              const isBeingDragged = draggingBlock?.id === block.id
+              const isBeingDragged = draggingBlock !== null && draggingBlock.id === block.id
               const displayStartMins = isBeingDragged ? draggingBlock!.curStartMins : timeToMinutes(block.start_time)
               const top    = Math.max(0, (displayStartMins - GRID_START * 60)) * (HOUR_PX / 60)
               const height = blockHeight(block.start_time, block.end_time)
