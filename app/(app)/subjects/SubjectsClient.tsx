@@ -11,6 +11,12 @@ import { ProgressBar } from '@/components/ui/ProgressBar'
 import Button from '@/components/ui/Button'
 import { getDaysColor, getEventTypeLabel } from '@/lib/study-priority'
 import type { AcademicEvent, AcademicEventType } from '@/types'
+import EditEventModal from '@/components/features/EditEventModal'
+
+function parseEventNotes(notes: string | null): { topic_ids?: string[] } {
+  if (!notes) return {}
+  try { const p = JSON.parse(notes); return typeof p === 'object' ? p : {} } catch { return {} }
+}
 
 const SUBJECT_COLORS = [
   '#10B981', '#06B6D4', '#3B82F6', '#8B5CF6',
@@ -38,7 +44,8 @@ interface SubjectItem {
   color: string
   units: Array<{
     id: string
-    topics: Array<{ id: string; status: string }>
+    name: string
+    topics: Array<{ id: string; name: string; status: string }>
   }>
 }
 
@@ -88,11 +95,7 @@ export default function SubjectsClient({
 
   // ── Events (centralized calendar view) ───────────────────
   const [localEvents, setLocalEvents] = useState<AcademicEvent[]>(initialEvents)
-  const [editingEventId, setEditingEventId] = useState<string | null>(null)
-  const [editEventForm, setEditEventForm] = useState<{
-    type: AcademicEventType; title: string; date: string
-  }>({ type: 'parcial', title: '', date: '' })
-  const [editEventSaving, setEditEventSaving] = useState(false)
+  const [editingEvent, setEditingEvent] = useState<AcademicEvent | null>(null)
   const [showAllEvents, setShowAllEvents] = useState(false)
 
   // ── Helpers ───────────────────────────────────────────────
@@ -229,38 +232,17 @@ export default function SubjectsClient({
     }
   }
 
-  // ── Edit event (from centralized view) ───────────────────
-  function openEditEvent(event: AcademicEvent) {
-    setEditingEventId(event.id)
-    setEditEventForm({ type: event.type, title: event.title, date: event.date })
+  // ── Edit event callbacks ──────────────────────────────────
+  function handleEventSaved(updated: { id: string; title: string; date: string; type: string; notes: string | null; subject_id?: string }) {
+    setLocalEvents(prev =>
+      prev.map(e => e.id === updated.id ? { ...e, ...updated } : e)
+        .sort((a, b) => a.date.localeCompare(b.date))
+    )
+    setEditingEvent(null)
+    router.refresh()
   }
 
-  async function saveEditEvent() {
-    if (!editingEventId) return
-    setEditEventSaving(true)
-    try {
-      const { data, error } = await supabase
-        .from('academic_events')
-        .update({ type: editEventForm.type, title: editEventForm.title, date: editEventForm.date })
-        .eq('id', editingEventId)
-        .select()
-        .single()
-      if (!error && data) {
-        setLocalEvents(prev =>
-          prev.map(e => e.id === editingEventId ? { ...e, ...data } : e)
-            .sort((a, b) => a.date.localeCompare(b.date))
-        )
-        setEditingEventId(null)
-        router.refresh()
-      }
-    } finally {
-      setEditEventSaving(false)
-    }
-  }
-
-  async function deleteEventFromCalendar(id: string) {
-    if (!confirm('¿Eliminar esta fecha importante?')) return
-    await supabase.from('academic_events').delete().eq('id', id)
+  function handleEventDeleted(id: string) {
     setLocalEvents(prev => prev.filter(e => e.id !== id))
     router.refresh()
   }
@@ -442,74 +424,72 @@ export default function SubjectsClient({
         </div>
       )}
 
-      {/* ── Centralized upcoming events (calendar view) ───────── */}
+      {/* ── Centralized upcoming events ───────────────────────── */}
       {upcomingEvents.length > 0 && (
         <div>
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold text-text-primary">Próximas fechas</h2>
             <span className="text-xs text-text-secondary">{upcomingEvents.length} evento{upcomingEvents.length !== 1 ? 's' : ''}</span>
           </div>
-          <div className="space-y-2">
-            {visibleEvents.map(event => {
-              const days  = differenceInDays(parseISO(event.date), startOfDay(new Date()))
-              const color = getDaysColor(days)
+
+          <div className="rounded-3xl bg-surface-2 border border-border-subtle overflow-hidden">
+            {visibleEvents.map((event, i, arr) => {
+              const days     = differenceInDays(parseISO(event.date), startOfDay(new Date()))
+              const color    = getDaysColor(days)
               const subColor = getSubjectColor(event.subject_id)
+              const extra    = parseEventNotes(event.notes ?? null)
+              const subName  = getSubjectName(event.subject_id)
+              const isLast   = i === arr.length - 1
+
               return (
                 <div
                   key={event.id}
-                  className="flex items-center gap-3 p-3 rounded-2xl bg-surface border border-border-subtle"
+                  onClick={() => setEditingEvent(event)}
+                  className={`flex items-center gap-3 px-4 py-3 cursor-pointer active:bg-surface transition-colors ${!isLast || upcomingEvents.length > 4 ? 'border-b border-border-subtle' : ''}`}
                 >
-                  {/* Subject color dot */}
-                  <div
-                    className="w-2 h-full min-h-[36px] rounded-full shrink-0"
-                    style={{ backgroundColor: subColor }}
-                  />
+                  {/* Timeline dot + connector */}
+                  <div className="flex flex-col items-center self-stretch py-0.5 shrink-0">
+                    <div
+                      className="w-2 h-2 rounded-full shrink-0"
+                      style={{ backgroundColor: subColor }}
+                    />
+                    {!isLast && <div className="w-px flex-1 bg-border-subtle mt-1" />}
+                  </div>
+
+                  {/* Content */}
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-text-primary truncate">{event.title}</p>
-                    <p className="text-xs text-text-secondary">
-                      {getSubjectName(event.subject_id)} · {getEventTypeLabel(event.type)}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <div className="text-right mr-1">
-                      <Badge variant={color === 'red' ? 'danger' : color === 'amber' ? 'warning' : 'success'}>
-                        {days === 0 ? 'Hoy' : days === 1 ? 'Mañana' : `${days}d`}
-                      </Badge>
-                      <p className="text-xs text-text-secondary mt-1">
-                        {format(parseISO(event.date), "d MMM", { locale: es })}
-                      </p>
+                    <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                      <span className="text-[10px] text-text-secondary bg-surface px-2 py-0.5 rounded-full border border-border-subtle">
+                        {getEventTypeLabel(event.type)}
+                      </span>
+                      {event.subject_id && (
+                        <span className="text-xs text-text-secondary">{subName}</span>
+                      )}
+                      {extra.topic_ids && extra.topic_ids.length > 0 && (
+                        <span className="text-[10px] text-primary/70">
+                          {extra.topic_ids.length} tema{extra.topic_ids.length > 1 ? 's' : ''}
+                        </span>
+                      )}
                     </div>
-                    <button
-                      onClick={() => openEditEvent(event)}
-                      className="w-8 h-8 flex items-center justify-center rounded-xl bg-surface-2 text-text-secondary hover:text-text-primary transition-colors"
-                      title="Editar"
-                    >
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                      </svg>
-                    </button>
-                    <button
-                      onClick={() => deleteEventFromCalendar(event.id)}
-                      className="w-8 h-8 flex items-center justify-center rounded-xl bg-red-500/10 text-red-400 hover:text-red-300 transition-colors"
-                      title="Eliminar"
-                    >
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                      </svg>
-                    </button>
                   </div>
+
+                  <Badge variant={color === 'red' ? 'danger' : color === 'amber' ? 'warning' : 'success'}>
+                    {days === 0 ? 'Hoy' : days === 1 ? 'Mañana' : `${days}d`}
+                  </Badge>
                 </div>
               )
             })}
+
+            {upcomingEvents.length > 4 && (
+              <button
+                onClick={() => setShowAllEvents(v => !v)}
+                className="w-full px-4 py-2.5 text-xs text-primary font-medium text-left"
+              >
+                {showAllEvents ? 'Mostrar menos' : `Ver ${upcomingEvents.length - 4} más`}
+              </button>
+            )}
           </div>
-          {upcomingEvents.length > 4 && (
-            <button
-              onClick={() => setShowAllEvents(v => !v)}
-              className="mt-2 w-full py-2 text-xs text-text-secondary hover:text-text-primary transition-colors"
-            >
-              {showAllEvents ? '▲ Ver menos' : `▼ Ver todas (${upcomingEvents.length})`}
-            </button>
-          )}
         </div>
       )}
 
@@ -784,84 +764,19 @@ export default function SubjectsClient({
         </div>
       )}
 
-      {/* ── Edit Event Modal (from calendar view) ────────────── */}
-      {editingEventId && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center px-4 pt-4 pb-24 bg-black/60 backdrop-blur-sm">
-          <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-3xl shadow-2xl">
-            <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-border-subtle">
-              <h3 className="text-base font-semibold text-text-primary">Editar fecha</h3>
-              <button
-                onClick={() => setEditingEventId(null)}
-                className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary"
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            <div className="px-5 py-4 space-y-3">
-              {/* Title */}
-              <div>
-                <p className="text-xs font-medium text-text-secondary mb-1.5">Título</p>
-                <input
-                  type="text"
-                  value={editEventForm.title}
-                  onChange={e => setEditEventForm(p => ({ ...p, title: e.target.value }))}
-                  placeholder="Ej: Primer parcial"
-                  autoFocus
-                  className="w-full h-11 px-4 rounded-2xl bg-surface-2 border border-border-subtle text-sm text-text-primary placeholder-text-secondary focus:outline-none focus:border-primary/60"
-                />
-              </div>
-
-              {/* Date */}
-              <div>
-                <p className="text-xs font-medium text-text-secondary mb-1.5">Fecha</p>
-                <input
-                  type="date"
-                  value={editEventForm.date}
-                  onChange={e => setEditEventForm(p => ({ ...p, date: e.target.value }))}
-                  className="w-full h-11 px-4 rounded-2xl bg-surface-2 border border-border-subtle text-sm text-text-primary focus:outline-none focus:border-primary/60"
-                />
-              </div>
-
-              {/* Type */}
-              <div>
-                <p className="text-xs font-medium text-text-secondary mb-1.5">Tipo</p>
-                <div className="grid grid-cols-2 gap-2">
-                  {EVENT_TYPES.map(t => (
-                    <button
-                      key={t.value}
-                      onClick={() => setEditEventForm(p => ({ ...p, type: t.value }))}
-                      className={`py-2.5 rounded-xl border text-xs font-medium transition-all ${
-                        editEventForm.type === t.value
-                          ? 'border-primary/50 bg-primary/10 text-primary'
-                          : 'border-border-subtle bg-surface-2 text-text-secondary'
-                      }`}
-                    >
-                      {t.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <div className="flex gap-3 px-5 pb-5">
-              <Button variant="secondary" className="flex-1" onClick={() => setEditingEventId(null)}>
-                Cancelar
-              </Button>
-              <Button
-                variant="primary"
-                className="flex-1"
-                onClick={saveEditEvent}
-                loading={editEventSaving}
-                disabled={!editEventForm.title.trim() || !editEventForm.date}
-              >
-                Guardar
-              </Button>
-            </div>
-          </div>
-        </div>
+      {editingEvent && (
+        <EditEventModal
+          event={{ ...editingEvent, subject_id: editingEvent.subject_id ?? undefined }}
+          subjects={subjects.map(s => ({ id: s.id, name: s.name, color: s.color, units: s.units.map(u => ({ id: u.id, name: u.name, topics: u.topics.map(t => ({ id: t.id, name: t.name })) })) }))}
+          onClose={() => setEditingEvent(null)}
+          onSaved={handleEventSaved}
+          onDeleted={handleEventDeleted}
+          onDuplicated={ev => {
+            setLocalEvents(prev =>
+              [...prev, ev].sort((a, b) => a.date.localeCompare(b.date))
+            )
+          }}
+        />
       )}
     </div>
   )

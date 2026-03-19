@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { format, parseISO, differenceInDays, startOfDay } from 'date-fns'
@@ -14,11 +14,17 @@ import Button from '@/components/ui/Button'
 import { getDaysColor, getEventTypeLabel } from '@/lib/study-priority'
 import type { SubjectWithDetails, AcademicEvent, Topic, TopicStatus, AcademicEventType, HallucinationChallenge } from '@/types'
 import ProgressHallucinationGuard from '@/components/features/ProgressHallucinationGuard'
+import EditEventModal from '@/components/features/EditEventModal'
 
 // How many topics to show before collapsing per unit
 const TOPICS_SHOWN_DEFAULT = 4
 // How many class logs to show before collapsing
 const LOGS_SHOWN_DEFAULT = 3
+
+function parseEventNotes(notes: string | null): { topic_ids?: string[] } {
+  if (!notes) return {}
+  try { const p = JSON.parse(notes); return typeof p === 'object' ? p : {} } catch { return {} }
+}
 
 interface Props {
   subject: SubjectWithDetails
@@ -102,17 +108,7 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
   const [eventLoading, setEventLoading]     = useState(false)
 
   // ── Event modal (edit) ────────────────────────────────────
-  const [editingEventId, setEditingEventId] = useState<string | null>(null)
-  const [editEventData, setEditEventData] = useState({
-    type: 'parcial' as AcademicEventType,
-    title: '',
-    date: '',
-    notes: '',
-  })
-  const [editEventTime, setEditEventTime]         = useState('')
-  const [editEventAula, setEditEventAula]         = useState('')
-  const [editEventTopicIds, setEditEventTopicIds] = useState<string[]>([])
-  const [editEventUnitId, setEditEventUnitId]     = useState('')
+  const [editingEvent, setEditingEvent] = useState<AcademicEvent | null>(null)
 
   // ── Class log view mode ───────────────────────────────────
   const [viewingLog, setViewingLog] = useState<any | null>(null)
@@ -127,9 +123,17 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
   // ── Feature 4: Hallucination detection ────────────────────────────────────
   const [hallucinationChallenge, setHallucinationChallenge] = useState<HallucinationChallenge | null>(null)
 
-  // ── Selected unit in class log modal ──────────────────────
+  // ── Selected unit in class log modal (accordion) ──────────
   const [classLogUnitId, setClassLogUnitId] = useState('')
-  const [editEventLoading, setEditEventLoading] = useState(false)
+  const [classLogOpenUnitId, setClassLogOpenUnitId] = useState<string | null>(null)
+  const [linkedEventId, setLinkedEventId] = useState('')
+  const classLogUnitRefs = useRef<Record<string, HTMLDivElement | null>>({})
+
+  useEffect(() => {
+    if (classLogOpenUnitId && classLogUnitRefs.current[classLogOpenUnitId]) {
+      classLogUnitRefs.current[classLogOpenUnitId]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
+  }, [classLogOpenUnitId])
 
   // ── Local events state ────────────────────────────────────
   const [localEvents, setLocalEvents] = useState<AcademicEvent[]>(events)
@@ -352,6 +356,8 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
   // ── Open class log modal (create or edit) ─────────────────
   function openClassLog(log?: any) {
     setClassLogUnitId('')
+    setClassLogOpenUnitId(null)
+    setLinkedEventId('')
     if (log) {
       setEditingLogId(log.id)
       setClassLogData({
@@ -430,8 +436,8 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
         }
       }
 
-      // Auto-create academic_event for homework with due_date (new logs only)
-      if (classLogData.has_homework && classLogData.due_date && !editingLogId) {
+      // Auto-create academic_event for homework with due_date (new logs only, skip if linked to existing)
+      if (classLogData.has_homework && classLogData.due_date && !editingLogId && !linkedEventId) {
         const { data: newEvent, error: evErr } = await supabase
           .from('academic_events')
           .insert({
@@ -451,6 +457,8 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
 
       setShowClassLog(false)
       setEditingLogId(null)
+      setLinkedEventId('')
+      setClassLogOpenUnitId(null)
       setClassLogData({ understanding_level: 3, has_homework: false, homework_description: '', due_date: '', topics_covered: [] })
       router.refresh()
     } finally {
@@ -494,70 +502,22 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
     }
   }
 
-  // ── Academic event — open edit modal ─────────────────────
-  function openEditEvent(event: AcademicEvent) {
-    setEditingEventId(event.id)
-    let plainNotes = event.notes || ''
-    let time = '', aula = '', topicIds: string[] = []
-    try {
-      const parsed = JSON.parse(event.notes || '')
-      if (parsed && typeof parsed === 'object' && '_notes' in parsed) {
-        plainNotes = parsed._notes || ''
-        time = parsed.time || ''
-        aula = parsed.aula || ''
-        topicIds = parsed.topic_ids || []
-      }
-    } catch {}
-    setEditEventData({ type: event.type, title: event.title, date: event.date, notes: plainNotes })
-    setEditEventTime(time)
-    setEditEventAula(aula)
-    setEditEventTopicIds(topicIds)
-    const foundUnit = topicIds.length > 0
-      ? Object.keys(unitTopics).find(uid => unitTopics[uid].some(t => topicIds.includes(t.id))) ?? ''
-      : ''
-    setEditEventUnitId(foundUnit)
-  }
-
-  // ── Academic event — save edit ────────────────────────────
-  async function updateEvent() {
-    if (!editingEventId) return
-    setEditEventLoading(true)
-    try {
-      const encodedNotes = JSON.stringify({
-        time: editEventTime || null,
-        aula: editEventAula || null,
-        topic_ids: editEventTopicIds.length > 0 ? editEventTopicIds : null,
-        _notes: editEventData.notes,
-      })
-      const { data, error } = await supabase
-        .from('academic_events')
-        .update({ ...editEventData, notes: encodedNotes })
-        .eq('id', editingEventId)
-        .select()
-        .single()
-      if (!error && data) {
-        setLocalEvents(prev =>
-          prev.map(e => e.id === editingEventId ? data : e)
-            .sort((a, b) => a.date.localeCompare(b.date))
-        )
-        setEditingEventId(null)
-        setEditEventUnitId('')
-        // Re-evaluate deadline alerts after event date change (fire-and-forget)
-        fetch('/api/notifications').catch(() => {})
-        router.refresh()
-      }
-    } finally {
-      setEditEventLoading(false)
-    }
-  }
-
-  // ── Academic event — delete ───────────────────────────────
-  async function deleteEvent(id: string) {
-    if (!confirm('¿Eliminar esta fecha importante?')) return
-    await supabase.from('academic_events').delete().eq('id', id)
-    setLocalEvents(prev => prev.filter(e => e.id !== id))
+  // ── Academic event — edit callbacks ──────────────────────
+  function handleEventSaved(updated: { id: string; title: string; date: string; type: string; notes: string | null; subject_id?: string }) {
+    setLocalEvents(prev =>
+      prev.map(e => e.id === updated.id ? { ...e, ...updated } : e)
+        .sort((a, b) => a.date.localeCompare(b.date))
+    )
+    setEditingEvent(null)
     router.refresh()
   }
+
+  function handleEventDeleted(id: string) {
+    setLocalEvents(prev => prev.filter(e => e.id !== id))
+    setEditingEvent(null)
+    router.refresh()
+  }
+
 
   // ── AI syllabus import ────────────────────────────────────
   async function importSyllabus() {
@@ -848,57 +808,47 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
         )}
 
         {upcomingEvts.length > 0 && (
-          <div>
-            <div className="space-y-2">
-              {visibleEvents.map(event => {
-                const days  = differenceInDays(parseISO(event.date), startOfDay(new Date()))
-                const color = getDaysColor(days)
-                return (
-                  <div key={event.id} className="flex items-center gap-2 p-3 rounded-2xl bg-surface border border-border-subtle">
+          <div className="rounded-3xl bg-surface-2 border border-border-subtle overflow-hidden">
+            {visibleEvents.map((event, i, arr) => {
+              const extra = parseEventNotes(event.notes)
+              const days  = differenceInDays(parseISO(event.date), startOfDay(new Date()))
+              const color = getDaysColor(days)
+              const isLast = i === arr.length - 1 && upcomingEvts.length <= 2
+              return (
+                <div
+                  key={event.id}
+                  onClick={() => setEditingEvent(event)}
+                  className={`flex items-center gap-3 px-4 py-3 cursor-pointer active:bg-surface transition-colors ${!isLast ? 'border-b border-border-subtle' : ''}`}
+                >
+                  <div className="flex flex-col items-center self-stretch py-0.5 shrink-0">
                     <div className={`w-2 h-2 rounded-full shrink-0 ${color === 'red' ? 'bg-red-500' : color === 'amber' ? 'bg-amber-500' : 'bg-green-500'}`} />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-text-primary">{event.title}</p>
-                      <p className="text-xs text-text-secondary">{getEventTypeLabel(event.type)}</p>
-                    </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <div className="text-right mr-1">
-                        <Badge variant={color === 'red' ? 'danger' : color === 'amber' ? 'warning' : 'success'}>
-                          {days === 0 ? 'Hoy' : days === 1 ? 'Mañana' : `${days}d`}
-                        </Badge>
-                        <p className="text-xs text-text-secondary mt-1">{format(parseISO(event.date), 'dd/MM')}</p>
-                      </div>
-                      <button
-                        onClick={() => openEditEvent(event)}
-                        className="w-8 h-8 flex items-center justify-center rounded-xl bg-surface-2 text-text-secondary hover:text-text-primary transition-colors"
-                        title="Editar"
-                      >
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                        </svg>
-                      </button>
-                      <button
-                        onClick={() => deleteEvent(event.id)}
-                        className="w-8 h-8 flex items-center justify-center rounded-xl bg-red-500/10 text-red-400 hover:text-red-300 transition-colors"
-                        title="Eliminar"
-                      >
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                      </button>
+                    {!isLast && <div className="w-px flex-1 bg-border-subtle mt-1" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-text-primary truncate">{event.title}</p>
+                    <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                      <span className="text-[10px] text-text-secondary bg-surface px-2 py-0.5 rounded-full border border-border-subtle">
+                        {getEventTypeLabel(event.type)}
+                      </span>
+                      {extra.topic_ids && extra.topic_ids.length > 0 && (
+                        <span className="text-[10px] text-primary/70">
+                          {extra.topic_ids.length} tema{extra.topic_ids.length > 1 ? 's' : ''}
+                        </span>
+                      )}
                     </div>
                   </div>
-                )
-              })}
-            </div>
-            {/* Accordion toggle */}
+                  <Badge variant={color === 'red' ? 'danger' : color === 'amber' ? 'warning' : 'success'}>
+                    {days === 0 ? 'Hoy' : days === 1 ? 'Mañana' : `${days}d`}
+                  </Badge>
+                </div>
+              )
+            })}
             {upcomingEvts.length > 2 && (
               <button
                 onClick={() => setShowAllEvents(e => !e)}
-                className="mt-2 w-full py-2 text-xs text-text-secondary hover:text-text-primary transition-colors"
+                className="w-full px-4 py-2.5 text-xs text-primary font-medium text-left border-t border-border-subtle"
               >
-                {showAllEvents
-                  ? '▲ Ver menos'
-                  : `▼ Ver todas (${upcomingEvts.length})`}
+                {showAllEvents ? 'Mostrar menos' : `Ver ${upcomingEvts.length - 2} más`}
               </button>
             )}
           </div>
@@ -1290,80 +1240,117 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
                   )}
                 </div>
               ) : (
-                <>
-                  <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden">
-                    <div className="flex items-center gap-3 px-4 py-3">
-                      <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                      </svg>
-                      <select
-                        value={classLogUnitId}
-                        onChange={e => { setClassLogUnitId(e.target.value); setClassLogData(d => ({ ...d, topics_covered: [] })) }}
-                        className="flex-1 bg-transparent text-sm text-text-primary focus:outline-none"
-                      >
-                        <option value="">Seleccionar unidad</option>
-                        {localUnits.filter(u => (unitTopics[u.id] || []).length > 0).map(u => (
-                          <option key={u.id} value={u.id}>{u.name}</option>
-                        ))}
-                      </select>
-                    </div>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between px-1">
+                    <p className="text-xs font-medium text-text-secondary">Temas vistos en clase</p>
+                    {classLogData.topics_covered.length > 0 && (
+                      <span className="text-xs text-primary font-medium">
+                        {classLogData.topics_covered.length} seleccionado{classLogData.topics_covered.length !== 1 ? 's' : ''}
+                      </span>
+                    )}
                   </div>
-
-                  {/* Topic multi-select */}
-                  {classLogUnitId && (() => {
-                    const unitTopicsArr = unitTopics[classLogUnitId] || []
-                    if (unitTopicsArr.length === 0) return null
-                    return (
-                      <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden">
-                        <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
-                          <p className="text-xs font-medium text-text-secondary">Temas vistos en clase</p>
-                          {classLogData.topics_covered.length > 0 && (
-                            <span className="text-xs text-primary font-medium">
-                              {classLogData.topics_covered.length} seleccionado{classLogData.topics_covered.length !== 1 ? 's' : ''}
-                            </span>
-                          )}
-                        </div>
-                        <div className="px-4 py-3">
-                          <div className="flex flex-wrap gap-2 mb-2">
-                            {unitTopicsArr.map(topic => (
-                              <button
-                                key={topic.id}
-                                onClick={() => toggleTopicCovered(topic.id)}
-                                className={`px-3 py-1.5 rounded-xl border text-xs font-medium transition-all min-h-[32px] ${
-                                  classLogData.topics_covered.includes(topic.id)
-                                    ? 'border-primary bg-primary/20 text-text-primary'
-                                    : 'border-border-subtle bg-surface text-text-secondary'
-                                }`}
+                  <div className="rounded-2xl border border-border-subtle overflow-hidden divide-y divide-border-subtle">
+                    {localUnits.filter(u => (unitTopics[u.id] || []).length > 0).map(unit => {
+                      const unitTopicsArr = unitTopics[unit.id] || []
+                      const isOpen = classLogOpenUnitId === unit.id
+                      const selInUnit = unitTopicsArr.filter(t => classLogData.topics_covered.includes(t.id)).length
+                      const allSel = selInUnit === unitTopicsArr.length && unitTopicsArr.length > 0
+                      return (
+                        <div key={unit.id} className="bg-surface-2" ref={el => { classLogUnitRefs.current[unit.id] = el }}>
+                          <button
+                            type="button"
+                            onClick={() => setClassLogOpenUnitId(isOpen ? null : unit.id)}
+                            className="w-full flex items-center justify-between px-4 py-3 text-left"
+                          >
+                            <span className="text-sm text-text-primary font-medium truncate pr-2">{unit.name}</span>
+                            <div className="flex items-center gap-2 shrink-0">
+                              {selInUnit > 0 && (
+                                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-primary/20 text-primary">
+                                  {selInUnit}/{unitTopicsArr.length}
+                                </span>
+                              )}
+                              <svg
+                                className={`w-4 h-4 text-text-secondary transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
+                                fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
                               >
-                                {classLogData.topics_covered.includes(topic.id) ? '✓ ' : ''}{topic.name}
-                              </button>
-                            ))}
-                          </div>
-                          {quickAddUnitId === classLogUnitId ? (
-                            <div className="flex gap-2 mt-1">
-                              <input
-                                type="text"
-                                value={quickTopicName}
-                                onChange={e => setQuickTopicName(e.target.value)}
-                                onKeyDown={e => {
-                                  if (e.key === 'Enter') quickAddTopic(classLogUnitId)
-                                  if (e.key === 'Escape') { setQuickAddUnitId(null); setQuickTopicName('') }
-                                }}
-                                placeholder="Nuevo tema..."
-                                autoFocus
-                                className="flex-1 h-8 px-3 rounded-lg bg-surface border border-border-subtle text-xs text-text-primary placeholder-text-secondary focus:outline-none"
-                              />
-                              <button onClick={() => quickAddTopic(classLogUnitId)} disabled={!quickTopicName.trim() || quickAdding} className="h-8 px-2.5 rounded-lg bg-primary text-white text-xs disabled:opacity-40">{quickAdding ? '…' : '✓'}</button>
-                              <button onClick={() => { setQuickAddUnitId(null); setQuickTopicName('') }} className="h-8 w-8 flex items-center justify-center rounded-lg bg-surface-2 text-text-secondary text-xs">✕</button>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                              </svg>
                             </div>
-                          ) : (
-                            <button onClick={() => { setQuickAddUnitId(classLogUnitId); setQuickTopicName('') }} className="text-xs text-primary/70 hover:text-primary transition-colors">+ tema nuevo</button>
+                          </button>
+                          {isOpen && (
+                            <div className="px-4 pb-3 bg-surface/40">
+                              <div className="flex items-center justify-between mb-2">
+                                <span className="text-[10px] text-text-secondary">{unitTopicsArr.length} tema{unitTopicsArr.length !== 1 ? 's' : ''}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const ids = unitTopicsArr.map(t => t.id)
+                                    if (allSel) {
+                                      setClassLogData(d => ({ ...d, topics_covered: d.topics_covered.filter(id => !ids.includes(id)) }))
+                                    } else {
+                                      setClassLogData(d => ({ ...d, topics_covered: [...new Set([...d.topics_covered, ...ids])] }))
+                                    }
+                                  }}
+                                  className="text-[10px] font-medium text-primary"
+                                >
+                                  {allSel ? 'Desmarcar todos' : 'Seleccionar todos'}
+                                </button>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                {unitTopicsArr.map(topic => {
+                                  const sel = classLogData.topics_covered.includes(topic.id)
+                                  return (
+                                    <button
+                                      key={topic.id}
+                                      type="button"
+                                      onClick={() => toggleTopicCovered(topic.id)}
+                                      className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                                        sel
+                                          ? 'border-primary bg-primary/20 text-text-primary'
+                                          : 'border-border-subtle bg-surface text-text-secondary'
+                                      }`}
+                                    >
+                                      {sel && '✓ '}{topic.name}
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                              {quickAddUnitId === unit.id ? (
+                                <div className="flex gap-2 mt-2">
+                                  <input
+                                    type="text"
+                                    value={quickTopicName}
+                                    onChange={e => setQuickTopicName(e.target.value)}
+                                    onKeyDown={e => {
+                                      if (e.key === 'Enter') quickAddTopic(unit.id)
+                                      if (e.key === 'Escape') { setQuickAddUnitId(null); setQuickTopicName('') }
+                                    }}
+                                    placeholder="Nuevo tema..."
+                                    autoFocus
+                                    className="flex-1 h-8 px-3 rounded-xl bg-surface border border-primary/50 text-xs text-text-primary placeholder-text-secondary focus:outline-none"
+                                  />
+                                  <button onClick={() => quickAddTopic(unit.id)} disabled={!quickTopicName.trim() || quickAdding} className="w-8 h-8 flex items-center justify-center rounded-xl bg-primary/20 text-primary text-sm font-bold disabled:opacity-40">{quickAdding ? '…' : '✓'}</button>
+                                  <button onClick={() => { setQuickAddUnitId(null); setQuickTopicName('') }} className="w-8 h-8 flex items-center justify-center rounded-xl bg-surface text-text-secondary text-xs">✕</button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => { setQuickAddUnitId(unit.id); setQuickTopicName('') }}
+                                  className="mt-2 flex items-center gap-1 text-[10px] text-primary/70 hover:text-primary transition-colors"
+                                >
+                                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                                  </svg>
+                                  Agregar tema
+                                </button>
+                              )}
+                            </div>
                           )}
                         </div>
-                      </div>
-                    )
-                  })()}
-                </>
+                      )
+                    })}
+                  </div>
+                </div>
               )}
 
               {/* Understanding level */}
@@ -1398,7 +1385,7 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
               {/* Homework toggle */}
               <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden">
                 <button
-                  onClick={() => setClassLogData(d => ({ ...d, has_homework: !d.has_homework }))}
+                  onClick={() => { setClassLogData(d => ({ ...d, has_homework: !d.has_homework })); setLinkedEventId('') }}
                   className="flex items-center justify-between w-full px-4 py-3"
                 >
                   <span className="text-sm text-text-primary">Quedó tarea / TP</span>
@@ -1420,6 +1407,33 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
                         className="flex-1 bg-transparent text-sm text-text-primary placeholder-text-secondary resize-none focus:outline-none"
                       />
                     </div>
+                    {upcomingEvts.length > 0 && (
+                      <div className="border-t border-border-subtle flex items-center gap-3 px-4 py-3">
+                        <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                        </svg>
+                        <select
+                          value={linkedEventId}
+                          onChange={e => {
+                            const ev = upcomingEvts.find(ev => ev.id === e.target.value)
+                            setLinkedEventId(e.target.value)
+                            if (ev) setClassLogData(d => ({
+                              ...d,
+                              due_date: ev.date,
+                              homework_description: d.homework_description || ev.title,
+                            }))
+                          }}
+                          className="flex-1 bg-transparent text-sm text-text-primary focus:outline-none"
+                        >
+                          <option value="">Relacionar con fecha existente (opcional)</option>
+                          {upcomingEvts.map(ev => (
+                            <option key={ev.id} value={ev.id}>
+                              {ev.title} — {format(parseISO(ev.date), 'dd/MM')}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                     <div className="border-t border-border-subtle flex items-center gap-3 px-4 py-3">
                       <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                         <rect x="3" y="4" width="18" height="18" rx="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
@@ -1428,12 +1442,15 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
                       <input
                         type="date"
                         value={classLogData.due_date}
-                        onChange={e => setClassLogData(d => ({ ...d, due_date: e.target.value }))}
+                        onChange={e => { setClassLogData(d => ({ ...d, due_date: e.target.value })); setLinkedEventId('') }}
                         className="flex-1 bg-transparent text-sm text-text-primary text-right focus:outline-none"
                       />
                     </div>
                     <div className="px-4 pb-2">
-                      <p className="text-xs text-primary/70">Crea un evento de entrega automáticamente</p>
+                      {linkedEventId
+                        ? <p className="text-xs text-green-400/80">Vinculado a fecha existente</p>
+                        : <p className="text-xs text-primary/70">Crea un evento de entrega automáticamente</p>
+                      }
                     </div>
                   </>
                 )}
@@ -1507,7 +1524,7 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
             <div className="flex gap-3 px-5 pb-5 shrink-0">
               <button
                 onClick={() => { deleteClassLog(viewingLog.id); setViewingLog(null) }}
-                className="w-10 h-10 flex items-center justify-center rounded-2xl bg-red-500/10 text-red-400 shrink-0"
+                className="w-10 h-10 flex items-center justify-center rounded-2xl bg-surface-2 text-text-secondary hover:text-red-400 transition-colors shrink-0"
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -1811,176 +1828,18 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
         </div>
       )}
 
-      {/* ── Event edit modal ──────────────────────────────────── */}
-      {editingEventId && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center px-4 pt-4 pb-6 bg-black/60 backdrop-blur-sm">
-          <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-3xl shadow-2xl max-h-[90dvh] flex flex-col">
-            <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-border-subtle shrink-0">
-              <h3 className="text-base font-semibold text-text-primary">Editar fecha</h3>
-              <button
-                onClick={() => { setEditingEventId(null); setEditEventUnitId('') }}
-                className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary"
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            <div className="overflow-y-auto px-5 py-4 space-y-3">
-              {/* Title + type group */}
-              <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden">
-                <div className="flex items-center gap-3 px-4 py-3 border-b border-border-subtle">
-                  <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                  </svg>
-                  <input
-                    type="text"
-                    value={editEventData.title}
-                    onChange={e => setEditEventData(d => ({ ...d, title: e.target.value }))}
-                    placeholder="Título del evento"
-                    autoFocus
-                    className="flex-1 bg-transparent text-sm text-text-primary placeholder-text-secondary focus:outline-none"
-                  />
-                </div>
-                <div className="flex items-center gap-3 px-4 py-3">
-                  <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
-                  </svg>
-                  <select
-                    value={editEventData.type}
-                    onChange={e => setEditEventData(d => ({ ...d, type: e.target.value as AcademicEventType }))}
-                    className="flex-1 bg-transparent text-sm text-text-primary focus:outline-none"
-                  >
-                    <option value="parcial">Parcial</option>
-                    <option value="parcial_intermedio">Parcial intermedio</option>
-                    <option value="entrega_tp">Entrega TP</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Date + time + aula */}
-              <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden">
-                <div className="flex items-center gap-3 px-4 py-3 border-b border-border-subtle">
-                  <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <rect x="3" y="4" width="18" height="18" rx="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
-                  </svg>
-                  <span className="text-sm text-text-secondary w-12 shrink-0">Fecha</span>
-                  <input
-                    type="date"
-                    value={editEventData.date}
-                    onChange={e => setEditEventData(d => ({ ...d, date: e.target.value }))}
-                    className="flex-1 bg-transparent text-sm text-text-primary text-right focus:outline-none"
-                  />
-                </div>
-                <div className="flex items-center gap-3 px-4 py-3 border-b border-border-subtle">
-                  <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <span className="text-sm text-text-secondary w-12 shrink-0">Hora</span>
-                  <input
-                    type="time"
-                    value={editEventTime}
-                    onChange={e => setEditEventTime(e.target.value)}
-                    className="flex-1 bg-transparent text-sm text-text-primary text-right focus:outline-none"
-                  />
-                </div>
-                <div className="flex items-center gap-3 px-4 py-3">
-                  <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                  <span className="text-sm text-text-secondary w-12 shrink-0">Aula</span>
-                  <input
-                    type="text"
-                    value={editEventAula}
-                    onChange={e => setEditEventAula(e.target.value)}
-                    placeholder="Ej: Aula 3, SUM B"
-                    className="flex-1 bg-transparent text-sm text-text-primary placeholder-text-secondary text-right focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              {/* Unit selector */}
-              {localUnits.filter(u => (unitTopics[u.id]?.length ?? 0) > 0).length > 0 && (
-                <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden">
-                  <div className="flex items-center gap-3 px-4 py-3">
-                    <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                    </svg>
-                    <select
-                      value={editEventUnitId}
-                      onChange={e => { setEditEventUnitId(e.target.value); setEditEventTopicIds([]) }}
-                      className="flex-1 bg-transparent text-sm text-text-primary focus:outline-none"
-                    >
-                      <option value="">Unidad (opcional)</option>
-                      {localUnits.filter(u => (unitTopics[u.id]?.length ?? 0) > 0).map(u => (
-                        <option key={u.id} value={u.id}>{u.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              )}
-
-              {/* Topics for selected unit */}
-              {editEventUnitId && (unitTopics[editEventUnitId]?.length ?? 0) > 0 && (
-                <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden">
-                  <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
-                    <p className="text-xs font-medium text-text-secondary">Temas del parcial</p>
-                    {editEventTopicIds.length > 0 && (
-                      <span className="text-xs text-primary font-medium">{editEventTopicIds.length} seleccionado{editEventTopicIds.length !== 1 ? 's' : ''}</span>
-                    )}
-                  </div>
-                  <div className="px-4 py-3 flex flex-wrap gap-2">
-                    {unitTopics[editEventUnitId].map(t => (
-                      <button
-                        key={t.id}
-                        onClick={() => setEditEventTopicIds(prev => prev.includes(t.id) ? prev.filter(id => id !== t.id) : [...prev, t.id])}
-                        className={`px-3 py-1.5 rounded-xl border text-xs font-medium transition-all ${
-                          editEventTopicIds.includes(t.id)
-                            ? 'border-primary bg-primary/20 text-text-primary'
-                            : 'border-border-subtle bg-surface text-text-secondary'
-                        }`}
-                      >
-                        {editEventTopicIds.includes(t.id) ? '✓ ' : ''}{t.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Notes */}
-              <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden">
-                <div className="flex items-start gap-3 px-4 py-3">
-                  <svg className="w-4 h-4 text-text-secondary shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h7" />
-                  </svg>
-                  <textarea
-                    value={editEventData.notes}
-                    onChange={e => setEditEventData(d => ({ ...d, notes: e.target.value }))}
-                    placeholder="Notas adicionales (opcional)"
-                    rows={2}
-                    className="flex-1 bg-transparent text-sm text-text-primary placeholder-text-secondary resize-none focus:outline-none"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="flex gap-3 px-5 pb-5 shrink-0">
-              <Button variant="secondary" className="flex-1" onClick={() => { setEditingEventId(null); setEditEventUnitId('') }}>
-                Cancelar
-              </Button>
-              <Button
-                variant="primary"
-                className="flex-1"
-                onClick={updateEvent}
-                loading={editEventLoading}
-                disabled={!editEventData.title || !editEventData.date}
-              >
-                Guardar cambios
-              </Button>
-            </div>
-          </div>
-        </div>
+      {editingEvent && (
+        <EditEventModal
+          event={{ ...editingEvent, subject_id: editingEvent.subject_id ?? undefined }}
+          subjects={[{ id: subject.id, name: subject.name, color: subject.color, units: subject.units.map(u => ({ id: u.id, name: u.name, topics: u.topics.map((t: any) => ({ id: t.id, name: t.name })) })) }]}
+          onClose={() => setEditingEvent(null)}
+          onSaved={handleEventSaved}
+          onDeleted={handleEventDeleted}
+          onDuplicated={ev => {
+            setLocalEvents(prev => [...prev, ev].sort((a, b) => a.date.localeCompare(b.date)))
+            router.refresh()
+          }}
+        />
       )}
 
       {/* ── Feature 4: Hallucination detection challenge modal ──────────────── */}

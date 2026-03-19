@@ -47,8 +47,8 @@ export default async function SubjectsPage() {
     .select(`
       id, name, color,
       units (
-        id,
-        topics (id, status)
+        id, name,
+        topics (id, name, status)
       )
     `)
     .eq('semester_id', semester.id)

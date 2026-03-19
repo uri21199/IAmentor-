@@ -21,6 +21,7 @@ Guía para levantar el proyecto desde cero en local y desplegarlo en producción
 13. [Comandos de referencia rápida](#13-comandos-de-referencia-rápida)
 14. [Troubleshooting](#14-troubleshooting)
 15. [Archivos de configuración importantes](#15-archivos-de-configuración-importantes)
+16. [Flujos principales de uso](#16-flujos-principales-de-uso)
 
 ---
 
@@ -719,3 +720,85 @@ Ambos formatos funcionan — solo asegurarse de copiar la key completa sin espac
 | `tests/tsconfig.json` | Config TypeScript específica para tests y scripts |
 | `scripts/db-reset.ts` | Hard reset de todas las tablas (irreversible) |
 | `.vercel/project.json` | Link del proyecto a Vercel (no commitear si es repositorio privado) |
+
+---
+
+## 16. Flujos principales de uso
+
+Esta sección describe los dos flujos de registro más frecuentes de la app una vez que el setup está completo. Para la documentación técnica detallada ver [README.md §22](README.md#22-flujo-de-post-clase) y [README.md §23](README.md#23-flujo-de-fechas-importantes).
+
+---
+
+### 16.1 Cargar un Post-clase
+
+Registrar una clase que acaba de ocurrir: qué temas se vieron, cuánto se entendió, y si quedó tarea pendiente.
+
+**Opción A — Desde el FAB (botón flotante +)**
+
+1. Tocar el botón **+** (esquina inferior derecha) → seleccionar **"Post-clase"**
+2. La app sugiere automáticamente la materia más frecuente en ese día de la semana (basado en historial). Si es incorrecta, cambiarla con el selector.
+3. Desplegar las **unidades** del temario haciendo clic en cada acordeón → seleccionar los temas vistos en clase (chips azules = seleccionados).
+   - Se puede tocar **"Seleccionar todos"** para marcar toda una unidad de un golpe.
+   - Si falta un tema en la lista, usar **"Agregar tema"** (inline, sin salir del modal).
+4. Elegir el **nivel de comprensión** con los 5 emojis.
+5. Si quedó tarea o TP: activar el **toggle "Quedó tarea / TP"** → completar descripción y fecha de entrega.
+   - Si la materia tiene parciales o TPs futuros cargados, aparece el selector **"Relacionar con fecha existente"**: al vincularlo, la fecha de entrega se completa automáticamente y no se crea un evento duplicado.
+   - Si no se vincula y se carga una fecha → se crea automáticamente un evento de tipo `entrega_tp`.
+6. Tocar **"Guardar clase"**. Los temas seleccionados que estaban en rojo pasan a amarillo automáticamente.
+
+**Opción B — Desde la pantalla de la materia**
+
+1. Ir a **Materias** → tocar la materia → botón **"Registrar clase de hoy"**
+2. El flujo es idéntico al FAB, con la diferencia de que la materia ya está pre-seleccionada y es posible cargar clases de días anteriores cambiando la fecha.
+3. Si ya existe un log para la fecha seleccionada, el modal lo carga para edición en lugar de crear uno nuevo.
+
+---
+
+### 16.2 Cargar una Fecha Importante
+
+Registrar un parcial, TP, turno médico o evento personal en el calendario.
+
+**Opción A — Desde el FAB (botón flotante +)**
+
+1. Tocar **+** → seleccionar **"Fecha importante"**
+2. Completar:
+   - **Título** (ej: "Parcial Física II")
+   - **Fecha** (date picker)
+   - **Tipo**: Parcial / Parcial Intermedio / Entrega TP / Turno médico / Evento personal
+3. Para tipos académicos (parcial, parcial_int, entrega_tp):
+   - Seleccionar la **materia** con el selector
+   - Opcionalmente marcar los **temas del temario** que cubre el evento (acordeón por unidades)
+   - Opcionalmente agregar **hora** y **aula**
+4. Tocar **"Guardar evento"**. El evento aparece en la agenda, el calendario y la pantalla de la materia.
+
+**Opción B — Desde la pantalla de la materia**
+
+1. Ir a **Materias** → tocar la materia → sección **"Fechas importantes"** → botón **"Nueva fecha"**
+2. La materia ya está pre-seleccionada
+3. Mismos campos que el FAB (tipo, título, fecha, temas, hora, aula)
+
+**Editar o eliminar un evento existente**
+
+Desde cualquier vista (agenda, calendario o pantalla de materia), tocar el evento para abrir **EditEventModal**:
+- Modificar cualquier campo y guardar → el cambio se refleja en todas las vistas de forma optimista (sin recarga completa)
+- **Eliminar** → se borra el evento
+- **Duplicar** → se crea una copia que se agrega al estado local inmediatamente
+
+---
+
+### 16.3 Verificar que los flujos funcionan correctamente
+
+Checklist rápido post-setup:
+
+```
+□ Tenés al menos 1 cuatrimestre activo en /settings/semesters
+□ Tenés al menos 1 materia con unidades y temas cargados en /subjects/[id]
+□ El FAB (+) es visible en todas las pantallas excepto /checkin
+□ Post-clase: los temas seleccionados aparecen en el acordeón de la materia
+□ Post-clase con tarea: el evento aparece en /agenda con tipo "Entrega TP"
+□ Fecha importante: el evento aparece en /agenda y en /calendar
+□ Fecha importante: los días restantes aparecen en el badge (rojo < 7 días)
+□ Editar evento desde /agenda: los cambios persisten al navegar a /calendar
+```
+
+> **Nota sobre materias inactivas o eliminadas:** el FAB solo muestra materias del cuatrimestre activo que no fueron eliminadas (soft-delete). Si una materia no aparece en el selector, verificar que el cuatrimestre correcto está marcado como activo en `/settings/semesters`.

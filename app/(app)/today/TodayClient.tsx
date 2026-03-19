@@ -11,7 +11,22 @@ import Button from '@/components/ui/Button'
 import { getGreeting, blockTypeColor, blockTypeIcon } from '@/lib/utils'
 import { getDaysColor as getColor } from '@/lib/study-priority'
 import PomodoroFocus from '@/components/features/PomodoroFocus'
+import EditEventModal from '@/components/features/EditEventModal'
 import type { CheckIn, DailyPlan, TimeBlock as TimeBlockType, TopicComprehension } from '@/types'
+
+// ── Event type labels ─────────────────────────────────────────────────────────
+const TYPE_LABELS: Record<string, string> = {
+  parcial:            'Parcial',
+  parcial_intermedio: 'Parcial Int.',
+  entrega_tp:         'Entrega TP',
+  medico:             'Turno médico',
+  personal:           'Personal',
+}
+
+function parseEventNotes(notes: string | null): { topic_ids?: string[] } {
+  if (!notes) return {}
+  try { const p = JSON.parse(notes); return typeof p === 'object' ? p : {} } catch { return {} }
+}
 
 // ── Subject/unit/topic hierarchy for the edit modal ──────────────────────────
 interface TopicOption { id: string; name: string; status: string }
@@ -121,6 +136,8 @@ export default function TodayClient({
   const [completion, setCompletion] = useState(plan?.completion_percentage || 0)
   const [upcomingExpanded, setUpcomingExpanded] = useState(false)
   const [now, setNow] = useState<Date | null>(null)
+  const [localUpcoming, setLocalUpcoming] = useState<any[]>(upcomingEvents)
+  const [editingEvent, setEditingEvent] = useState<any | null>(null)
 
   // ── Drag & drop state ────────────────────────────────────────────────────
   const [draggingBlock, setDraggingBlock] = useState<{
@@ -652,7 +669,7 @@ export default function TodayClient({
       )}
 
       {/* ── Upcoming academic events ──────────────────────────────────────────── */}
-      {upcomingEvents.length > 0 && (
+      {localUpcoming.length > 0 && (
         <div className="px-4 pb-4 mt-2">
           <div className="flex items-center gap-2.5 mb-2">
             <div className="w-6 h-6 rounded-lg bg-amber-500/15 flex items-center justify-center shrink-0">
@@ -661,23 +678,40 @@ export default function TodayClient({
               </svg>
             </div>
             <p className="text-sm font-semibold text-text-primary">Próximas fechas</p>
-            <span className="ml-auto text-xs text-text-secondary">{upcomingEvents.length}</span>
+            <span className="ml-auto text-xs text-text-secondary">{localUpcoming.length}</span>
           </div>
 
           <div className="rounded-3xl bg-surface-2 border border-border-subtle overflow-hidden">
-            {(upcomingExpanded ? upcomingEvents : upcomingEvents.slice(0, 3)).map((event: any, i: number, arr: any[]) => {
+            {(upcomingExpanded ? localUpcoming : localUpcoming.slice(0, 3)).map((event: any, i: number, arr: any[]) => {
               const days  = differenceInDays(parseISO(event.date), startOfDay(new Date()))
               const color = getColor(days)
               const isLast = i === arr.length - 1
               return (
-                <div key={event.id} className={`flex items-center gap-3 px-4 py-3 ${!isLast ? 'border-b border-border-subtle' : ''}`}>
+                <div
+                  key={event.id}
+                  onClick={() => setEditingEvent(event)}
+                  className={`flex items-center gap-3 px-4 py-3 cursor-pointer active:bg-surface transition-colors ${!isLast ? 'border-b border-border-subtle' : ''}`}
+                >
                   <div className="flex flex-col items-center self-stretch py-0.5 shrink-0">
                     <div className={`w-2 h-2 rounded-full shrink-0 ${color === 'red' ? 'bg-red-500' : color === 'amber' ? 'bg-amber-400' : 'bg-green-500'}`} />
                     {!isLast && <div className="w-px flex-1 bg-border-subtle mt-1" />}
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-text-primary truncate">{event.title}</p>
-                    <p className="text-xs text-text-secondary mt-0.5">{event.subjects?.name}</p>
+                    <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                      <span className="text-[10px] text-text-secondary bg-surface px-2 py-0.5 rounded-full border border-border-subtle">
+                        {TYPE_LABELS[event.type] ?? event.type}
+                      </span>
+                      {event.subjects?.name && (
+                        <span className="text-xs text-text-secondary">{event.subjects.name}</span>
+                      )}
+                      {(() => {
+                        const n = parseEventNotes(event.notes)
+                        return n.topic_ids && n.topic_ids.length > 0
+                          ? <span className="text-[10px] text-primary/70">{n.topic_ids.length} tema{n.topic_ids.length > 1 ? 's' : ''}</span>
+                          : null
+                      })()}
+                    </div>
                   </div>
                   <Badge variant={color === 'red' ? 'danger' : color === 'amber' ? 'warning' : 'success'}>
                     {days === 0 ? 'Hoy' : days === 1 ? 'Mañana' : `${days}d`}
@@ -685,12 +719,12 @@ export default function TodayClient({
                 </div>
               )
             })}
-            {upcomingEvents.length > 3 && (
+            {localUpcoming.length > 3 && (
               <button
                 onClick={() => setUpcomingExpanded(p => !p)}
                 className="w-full px-4 py-2.5 border-t border-border-subtle text-xs text-primary font-medium text-left"
               >
-                {upcomingExpanded ? 'Mostrar menos' : `Ver ${upcomingEvents.length - 3} más`}
+                {upcomingExpanded ? 'Mostrar menos' : `Ver ${localUpcoming.length - 3} más`}
               </button>
             )}
           </div>
@@ -719,22 +753,11 @@ export default function TodayClient({
           <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-3xl shadow-2xl max-h-[90dvh] flex flex-col">
             <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-border-subtle shrink-0">
               <h3 className="text-base font-semibold text-text-primary">Editar bloque</h3>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => deleteBlock(editingBlock.id)}
-                  className="w-8 h-8 flex items-center justify-center rounded-full bg-red-500/10 text-red-400"
-                  title="Eliminar bloque"
-                >
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                </button>
-                <button onClick={() => setEditingBlock(null)} className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary">
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
+              <button onClick={() => setEditingBlock(null)} className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
             </div>
 
             <div className="overflow-y-auto px-5 py-4 space-y-3">
@@ -830,14 +853,54 @@ export default function TodayClient({
               )}
             </div>
 
-            <div className="flex gap-3 px-5 pb-5 shrink-0">
+            <div className="flex gap-3 px-5 pb-3 shrink-0">
               <Button variant="secondary" className="flex-1" onClick={() => setEditingBlock(null)}>Cancelar</Button>
               <Button variant="primary" className="flex-1" onClick={saveEditedBlock} loading={savingEdit} disabled={!editTitle.trim() || !editStartTime || !editEndTime}>
                 Guardar
               </Button>
             </div>
+            <div className="px-5 pb-5 shrink-0">
+              <button
+                type="button"
+                onClick={() => deleteBlock(editingBlock.id)}
+                className="w-full py-2 text-sm text-red-400 font-medium"
+              >
+                Eliminar bloque
+              </button>
+            </div>
           </div>
         </div>
+      )}
+
+      {/* ── Event editing modal ───────────────────────────────────────────────── */}
+      {editingEvent && (
+        <EditEventModal
+          event={editingEvent}
+          subjects={subjectsData.map(s => ({ id: s.id, name: s.name, color: s.color, units: s.units.map(u => ({ id: u.id, name: u.name, topics: u.topics.map(t => ({ id: t.id, name: t.name })) })) }))}
+          onClose={() => setEditingEvent(null)}
+          onSaved={updated => {
+            const newSubj = subjectsData.find(s => s.id === updated.subject_id)
+            setLocalUpcoming(prev =>
+              prev.map(e => e.id === updated.id
+                ? { ...e, ...updated, subjects: newSubj ? { name: newSubj.name, color: newSubj.color } : e.subjects }
+                : e
+              ).sort((a, b) => a.date.localeCompare(b.date))
+            )
+            setEditingEvent(null)
+          }}
+          onDeleted={id => {
+            setLocalUpcoming(prev => prev.filter(e => e.id !== id))
+            setEditingEvent(null)
+          }}
+          onDuplicated={ev => {
+            if (ev.date < today) return
+            const newSubj = subjectsData.find(s => s.id === ev.subject_id)
+            setLocalUpcoming(prev =>
+              [...prev, { ...ev, subjects: newSubj ? { name: newSubj.name, color: newSubj.color } : null }]
+                .sort((a, b) => a.date.localeCompare(b.date))
+            )
+          }}
+        />
       )}
     </div>
   )

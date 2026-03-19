@@ -127,7 +127,7 @@ export function getDowArg(): number {
 
 export function getGreeting(): string {
   const hour = parseInt(getCurrentTimeArg().split(':')[0], 10)
-  if (hour < 12) return 'Buenos días'
-  if (hour < 18) return 'Buenas tardes'
+  if (hour >= 6 && hour < 13) return 'Buenos días'
+  if (hour >= 13 && hour < 20) return 'Buenas tardes'
   return 'Buenas noches'
 }

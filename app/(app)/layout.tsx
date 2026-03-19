@@ -9,12 +9,27 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   if (!user) redirect('/login')
 
-  // Fetch subjects for the FabMenu (post-clase + event forms need subjects)
-  const { data: subjects } = await supabase
-    .from('subjects')
-    .select('id, name, color, units(id, name, order_index, topics(id, name, status))')
+  // Fetch active semester to scope subjects
+  const { data: semesterRows } = await supabase
+    .from('semesters')
+    .select('id')
     .eq('user_id', user.id)
-    .order('name')
+    .eq('is_active', true)
+    .order('created_at', { ascending: false })
+    .limit(1)
+
+  const activeSemesterId = semesterRows?.[0]?.id ?? null
+
+  // Fetch subjects for the FabMenu — only active semester, exclude soft-deleted
+  const { data: subjects } = activeSemesterId
+    ? await supabase
+        .from('subjects')
+        .select('id, name, color, units(id, name, order_index, topics(id, name, status))')
+        .eq('semester_id', activeSemesterId)
+        .eq('user_id', user.id)
+        .is('deleted_at', null)
+        .order('name')
+    : { data: null }
 
   const subjectsData = (subjects || []).map((s: any) => ({
     id: s.id,

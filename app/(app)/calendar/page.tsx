@@ -12,6 +12,13 @@ export default async function CalendarPage() {
   // Fetch events for the next 6 months
   const in6Months = new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
+  const { data: activeSem } = await supabase
+    .from('semesters')
+    .select('id')
+    .eq('user_id', user.id)
+    .eq('is_active', true)
+    .single()
+
   const [{ data: events }, { data: subjectsData }] = await Promise.all([
     supabase
       .from('academic_events')
@@ -19,11 +26,15 @@ export default async function CalendarPage() {
       .eq('user_id', user.id)
       .lte('date', in6Months)
       .order('date', { ascending: true }),
-    supabase
-      .from('subjects')
-      .select('id, name, color, units(id, name, order_index, topics(id, name, status))')
-      .eq('user_id', user.id)
-      .order('name'),
+    activeSem
+      ? supabase
+          .from('subjects')
+          .select('id, name, color, units(id, name, order_index, topics(id, name, status))')
+          .eq('user_id', user.id)
+          .eq('semester_id', activeSem.id)
+          .is('deleted_at', null)
+          .order('name')
+      : { data: [] },
   ])
 
   return (

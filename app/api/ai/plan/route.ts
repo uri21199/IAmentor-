@@ -163,18 +163,20 @@ export async function POST() {
     }
   }
 
-  for (const cls of (todayClasses || [])) {
-    fixedBlocks.push({
-      id: `fixed_class_${cls.id}`,
-      start_time: cls.start_time,
-      end_time: cls.end_time,
-      type: 'class',
-      title: `Clase: ${cls.subjects?.name || 'Materia'}`,
-      description: `${cls.modality === 'presencial' ? '🏫 Presencial' : '💻 Virtual'} — ${cls.subjects?.name || 'Materia'}`,
-      subject_id: cls.subject_id,
-      completed: false,
-      priority: 'high',
-    })
+  if (effectiveCheckin.has_faculty) {
+    for (const cls of (todayClasses || [])) {
+      fixedBlocks.push({
+        id: `fixed_class_${cls.id}`,
+        start_time: cls.start_time,
+        end_time: cls.end_time,
+        type: 'class',
+        title: `Clase: ${cls.subjects?.name || 'Materia'}`,
+        description: `${cls.modality === 'presencial' ? '🏫 Presencial' : '💻 Virtual'} — ${cls.subjects?.name || 'Materia'}`,
+        subject_id: cls.subject_id,
+        completed: false,
+        priority: 'high',
+      })
+    }
   }
 
   // ── 5c. Travel blocks (deterministic) ──────────────────

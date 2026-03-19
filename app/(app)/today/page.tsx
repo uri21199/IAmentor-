@@ -74,8 +74,10 @@ export default async function TodayPage({
     eventsQ,
     supabase.from('checkins').select('date, energy_level')
       .eq('user_id', user.id).order('date', { ascending: false }).limit(7),
-    supabase.from('subjects').select('id, name, color, units(id, name, order_index, topics(id, name, status))')
-      .eq('user_id', user.id).order('name'),
+    activeSemRows?.[0]
+      ? supabase.from('subjects').select('id, name, color, units(id, name, order_index, topics(id, name, status))')
+          .eq('user_id', user.id).eq('semester_id', activeSemRows[0].id).is('deleted_at', null).order('name')
+      : Promise.resolve({ data: [] }),
   ])
 
   // ── Preview blocks (when no check-in for today) ───────────

@@ -30,6 +30,8 @@
 19. [Detección de Alucinación de Progreso](#19-detección-de-alucinación-de-progreso)
 20. [Heatmap de Dominio Académico](#20-heatmap-de-dominio-académico)
 21. [Ajuste por Carga Cognitiva](#21-ajuste-por-carga-cognitiva)
+22. [Flujo de Post-clase](#22-flujo-de-post-clase)
+23. [Flujo de Fechas Importantes](#23-flujo-de-fechas-importantes)
 
 ---
 
@@ -65,6 +67,10 @@ La app mantiene una jerarquía académica completa (cuatrimestre → materia →
 | **Plan IA** | Generación con Claude. Bloques de trabajo/clase/viaje son determinísticos; Claude llena el resto. |
 | **Replanificación** | Ajusta el plan desde la hora actual describiendo el cambio ("me enfermé", "reunión extra"). |
 | **Tracker académico** | Jerarquía Cuatrimestre → Materia → Unidad → Tema con estado rojo/amarillo/verde. |
+| **Registro post-clase** | FAB global y pantalla de materia. Acordeones por unidad para marcar temas vistos, nivel de comprensión, tarea/TP opcional con fecha entrega y vínculo a fecha importante existente. Sugerencia automática de materia por historial del día de la semana. Ver [§22](#22-flujo-de-post-clase). |
+| **Fechas importantes** | Desde FAB o desde cada materia. Tipos: parcial, parcial intermedio, entrega TP, turno médico, personal. Vincula temas al evento mediante acordeón. Edición y duplicación desde `EditEventModal`. Ver [§23](#23-flujo-de-fechas-importantes). |
+| **Agenda** | Vista cronológica de todos los eventos. Filtros por tipo y materia. Toggle de eventos pasados (últimos 90 días). Edición in-situ. |
+| **Calendario** | Vista mensual con puntos de urgencia por día (verde/amber/rojo). Panel de detalle del día seleccionado con edición. |
 | **Parsing de PDF con IA** | Sube programa de materia o calendario → Claude extrae temas y fechas de parciales automáticamente. |
 | **Notificaciones inteligentes** | 7 tipos de alertas. Motor de triggers puro. Push via VAPID. Deduplicación automática. |
 | **Gym tracker** | Rotación automática (empuje/jale/piernas/cardio/movilidad). 48 ejercicios. Sobrecarga progresiva. |
@@ -94,7 +100,6 @@ La app mantiene una jerarquía académica completa (cuatrimestre → materia →
 | Error toasts visibles en fallos de API | Media |
 | Rate limiting en `/api/ai/*` (Upstash Redis) | Alta (seguridad) |
 | Upgrade Next.js a 15.x (vulnerabilidad conocida en 14.2.15) | Alta (seguridad) |
-| UI de registro post-clase (tabla `class_logs` existe) | Baja |
 | Focus trap en modales | Baja |
 | Íconos PWA reales (192px, 512px, apple-touch) | Baja |
 | Exportar plan a PDF o `.ics` | Baja |
@@ -312,7 +317,8 @@ IAmentor/
 │   │   └── TopicPill.tsx               Pill de tema con status red/yellow/green
 │   ├── features/
 │   │   ├── ReplanButton.tsx            Botón "Replanificar" con estado loading → /api/ai/replan
-│   │   ├── FabMenu.tsx                 FAB global: post-clase, add evento, replan
+│   │   ├── FabMenu.tsx                 FAB global: PostClaseModal + EventoModal + ImprevistoModal
+│   │   ├── EditEventModal.tsx          Modal de edición/eliminación/duplicación de eventos académicos
 │   │   ├── PomodoroFocus.tsx           Timer Pomodoro
 │   │   ├── NotificationCenter.tsx      Dropdown/panel de notificaciones (campanita)
 │   │   ├── NotificationBanner.tsx      Banner de notificación inline en la pantalla
@@ -1034,6 +1040,10 @@ TIPOGRAFÍA
 | Plan IA | ✅ Funcional | Bloques determinísticos garantizados. Claude genera el resto. |
 | Replanificación | ✅ Funcional | Ajusta desde hora actual. Preserva completados y editados. |
 | Tracker académico | ✅ Funcional | CRUD temas/unidades/eventos. Toggle RGB. |
+| Registro post-clase | ✅ Funcional | FAB + pantalla de materia. Acordeón unidades/temas. Comprensión, tarea/TP, vinculación a evento, sugerencia por historial. |
+| Fechas importantes | ✅ Funcional | FAB + pantalla de materia. CRUD completo (crear/editar/eliminar/duplicar). Vínculo de temas. Timeline UI en agenda y materia. |
+| Agenda | ✅ Funcional | Filtros tipo + materia. Toggle pasados. Edición in-situ con `EditEventModal`. |
+| Calendario | ✅ Funcional | Vista mensual. Puntos de urgencia. Panel de detalle del día. Edición in-situ. |
 | Parsing PDF con IA | ✅ Funcional | Sube programa → temas. Sube calendario → fechas. |
 | Notificaciones | ✅ Funcional | Motor puro. 7 tipos. Dedup. Push VAPID. |
 | Google Calendar | ✅ Funcional | OAuth2 completo. Token refresh automático. |
@@ -1043,7 +1053,6 @@ TIPOGRAFÍA
 | PWA | ✅ Funcional | SW generado, manifest, instalable. |
 | Deploy Vercel | ✅ Live | https://iamentor.vercel.app |
 | Tests E2E | ✅ 23/23 | Suite idempotente, 9 pasos. |
-| Log de clase | ⚠️ Schema listo | Tabla `class_logs` existe. UI no implementada. |
 | Travel logs | ⚠️ Schema listo | Tabla `travel_logs` existe. UI no implementada. |
 | Pomodoro | ⚠️ Componente listo | `PomodoroFocus.tsx` existe. No integrado al plan. |
 | Vista planes históricos | ❌ Pendiente | Datos en `daily_plans`. Sin UI. |
@@ -1087,7 +1096,6 @@ Identificadas durante el análisis profundo del proyecto. Ordenadas por impacto 
 | **Streaming SSE del plan** | Elimina la espera de 5s mostrando bloques a medida que Claude los genera | Baja (1-2 días) |
 | **Plan pre-generado a las 6 AM** | Vercel Cron Job genera el plan antes de que el usuario despierte | Media |
 | **Vista semanal del plan** | Agenda de la semana con bloques de estudio planificados | Media |
-| **Registro post-clase desde FAB** | Cargar temas vistos + comprensión directamente desde el botón flotante | Baja |
 | **Travel logs con UI** | Registrar qué se estudió en cada segmento de viaje | Baja |
 | **Histórico de planes** | Ver planes de días pasados con completion % | Baja |
 
@@ -1350,3 +1358,298 @@ Esto garantiza coherencia: el sistema siempre tiene una única fuente de verdad 
 | [app/(app)/gym/page.tsx](app/(app)/gym/page.tsx) | Fetcha eventos, calcula `studyMode`, pasa a GymClient |
 | [app/(app)/gym/GymClient.tsx](app/(app)/gym/GymClient.tsx) | Acepta `studyMode`, pasa a `getWorkoutPlan`, renderiza banner |
 | [lib/study-priority.ts](lib/study-priority.ts) | `determineStudyMode(days)` — función reutilizada |
+
+---
+
+## 22. Flujo de Post-clase
+
+> Permite registrar lo que se vio en una clase: temas cubiertos, nivel de comprensión y tarea/TP pendiente. Se puede cargar desde dos puntos de entrada que comparten la misma tabla destino (`class_logs`).
+
+### Puntos de entrada
+
+| Desde | Componente | Cuándo usarlo |
+|-------|-----------|---------------|
+| FAB global (+) → "Post-clase" | `FabMenu.tsx → PostClaseModal` | Rápido, desde cualquier pantalla |
+| Pantalla de la materia → "Registrar clase de hoy" | `SubjectDetailClient.tsx` (modal inline) | Ya estás en la materia, más contexto |
+
+---
+
+### Flujo completo — FAB (PostClaseModal)
+
+```
+1. Usuario abre FAB → toca "Post-clase"
+   └── Se abre PostClaseModal
+
+2. Sugerencia automática de materia
+   ├── useEffect al montar: consulta class_logs de los últimos 90 días
+   ├── Filtra por el mismo día de la semana (ej: si es miércoles, busca logs de otros miércoles)
+   ├── Cuenta frecuencia por subject_id
+   └── Pre-selecciona la materia más frecuente + muestra hint "Sugerido según tu historial del día"
+       (el hint desaparece si el usuario cambia la selección manualmente)
+
+3. Selección de materia
+   └── handleSubjectChange(id):
+       ├── Carga units+topics de subjectsData (ya en memoria, sin fetch)
+       └── Fetch async: academic_events upcoming para esa materia (para vinculación de tarea)
+
+4. Acordeón de temas vistos
+   ├── Una fila por unidad con badge "N/total" si hay temas seleccionados
+   ├── Clic en encabezado → despliega → auto-scroll suave al acordeón (scrollIntoView block:nearest)
+   ├── Chips de temas: clic alterna selección (borde azul + checkmark cuando seleccionado)
+   ├── "Seleccionar todos" / "Desmarcar todos" por unidad
+   └── "Agregar tema" inline → input + confirm → INSERT en topics → aparece seleccionado
+
+5. Nivel de comprensión
+   └── 5 emojis (😕 😐 🙂 😊 🤩) que mapean a understanding_level 1–5
+
+6. Tarea / TP (toggle)
+   ├── OFF (default): no se registra tarea
+   └── ON:
+       ├── Descripción de la tarea (texto libre)
+       ├── "Relacionar con fecha existente" (select, solo si la materia tiene upcoming events)
+       │     └── Al seleccionar: auto-rellena fecha de entrega con la fecha del evento
+       ├── Fecha de entrega (input date)
+       │     └── Si se cambia manualmente: limpia la relación con evento existente
+       └── Hint: "Vinculado a fecha existente" | "Si agregás una fecha, se crea el evento automáticamente"
+
+7. Guardar
+   └── INSERT en class_logs:
+       ├── subject_id, date (hoy), topics_covered_json[], understanding_level
+       ├── has_homework, homework_description, due_date
+       └── Si has_homework && due_date && sin linkedEventId:
+               INSERT en academic_events (tipo 'entrega_tp', title=homework_description)
+   └── UPDATE topics: last_studied=NOW(), status='yellow' para los que estaban en 'red'
+   └── router.refresh() → cierra modal
+```
+
+---
+
+### Flujo completo — Pantalla de materia (SubjectDetailClient)
+
+```
+1. Usuario entra a /subjects/[id] → toca "Registrar clase de hoy"
+   └── Se abre el modal de class log (inline en la pantalla)
+
+2. Selección de fecha
+   └── Input date con default = hoy. Permite cargar clases de días anteriores.
+       Si ya existe un class_log para esa fecha → el modal carga ese log para edición
+
+3. Acordeón de temas vistos
+   ├── Solo muestra unidades que tienen al menos 1 tema
+   ├── Mismo patrón que PostClaseModal: badge N/total, auto-scroll, chips, select/deselect all
+   └── "Agregar tema" inline (reutiliza quickAddUnitId/quickAddTopic del estado global)
+
+4. Nivel de comprensión
+   └── 5 emojis → understanding_level 1–5
+
+5. Tarea / TP (toggle)
+   ├── Igual que en FAB
+   ├── "Relacionar con fecha existente": usa localEvents (ya cargados en estado), filtra upcoming
+   └── Seleccionar un evento → auto-rellena due_date y pre-rellena homework_description si está vacío
+
+6. Guardar (nuevo log) / Actualizar (edición de log existente)
+   └── Si nuevo && has_homework && due_date && sin linkedEventId:
+           INSERT en academic_events
+   └── UPDATE topics (status 'red' → 'yellow') si hay temas cubiertos
+   └── Recarga logs en estado local → cierra modal
+```
+
+---
+
+### Tabla de datos generada
+
+```sql
+-- class_logs
+INSERT INTO class_logs (
+  user_id, subject_id, date,
+  topics_covered_json,   -- UUID[] de topics seleccionados
+  understanding_level,   -- 1–5
+  has_homework,          -- boolean
+  homework_description,  -- string | null
+  due_date               -- YYYY-MM-DD | null
+)
+
+-- academic_events (creado automáticamente si due_date sin evento vinculado)
+INSERT INTO academic_events (
+  user_id, subject_id, type='entrega_tp',
+  title=homework_description, date=due_date
+)
+
+-- topics (side effect)
+UPDATE topics SET status='yellow', last_studied=NOW()
+WHERE id IN (topics_covered_json) AND status='red'
+```
+
+---
+
+### Archivos involucrados
+
+| Archivo | Rol |
+|---------|-----|
+| [components/features/FabMenu.tsx](components/features/FabMenu.tsx) | `PostClaseModal` — flujo rápido desde FAB |
+| [app/(app)/subjects/[id]/SubjectDetailClient.tsx](app/(app)/subjects/[id]/SubjectDetailClient.tsx) | Modal inline de class log en pantalla de materia |
+| [app/(app)/layout.tsx](app/(app)/layout.tsx) | Fetch de `subjectsData` (solo semestre activo, sin deleted) para pasar al FAB |
+
+---
+
+## 23. Flujo de Fechas Importantes
+
+> Gestión completa del calendario académico y personal: crear, ver, editar, eliminar y duplicar eventos. Los eventos se visualizan en tres vistas distintas (materia, agenda, calendario) y se usan como input para el plan IA y el sistema de notificaciones.
+
+### Tipos de eventos
+
+| Tipo | Etiqueta | Color UI |
+|------|----------|----------|
+| `parcial` | Parcial | Rojo |
+| `parcial_intermedio` | Parcial Int. | Amber |
+| `entrega_tp` | Entrega TP | Violeta |
+| `medico` | Turno médico | Cyan |
+| `personal` | Personal | Gris |
+
+Los tipos `parcial`, `parcial_intermedio` y `entrega_tp` son **académicos**: permiten vincular una materia y temas del temario. Los otros dos son personales.
+
+---
+
+### Puntos de creación
+
+#### A. FAB (+) → "Fecha importante" (EventoModal)
+
+```
+1. Título (texto libre)
+2. Fecha (date picker)
+3. Tipo (select: parcial / parcial_int / entrega_tp / médico / personal)
+
+4. Materia (solo para tipos académicos)
+   └── Al seleccionar: carga unidades+topics para acordeón de temas
+
+5. Temas del evento (acordeón, solo si tipo académico + materia con temas)
+   ├── Misma UX que post-clase: badge N/total, auto-scroll, chips, select/deselect all
+   └── "Agregar tema" inline
+   Los topic_ids se guardan en notes como JSON: { topic_ids: [...] }
+
+6. Hora (opcional) + Aula (opcional, solo académicos)
+   └── Se guardan en notes JSON: { time, aula, topic_ids }
+
+7. Guardar → INSERT academic_events → router.refresh()
+```
+
+#### B. Pantalla de materia → "Nueva fecha importante" (SubjectDetailClient)
+
+```
+1. Formulario inline en la pantalla de la materia (no modal separado)
+2. La materia ya está pre-seleccionada
+3. Campos: tipo, título, fecha, hora (opcional), aula (opcional)
+4. Acordeón de temas del evento (igual al FAB)
+5. Guardar → INSERT → aparece en la sección "Fechas importantes" de la materia
+```
+
+---
+
+### Visualización de eventos
+
+#### En la pantalla de materia (SubjectDetailClient)
+
+```
+Sección "Fechas importantes":
+├── Solo muestra upcoming events (fecha >= hoy)
+├── Timeline format: dot de color (rojo/amber/verde según urgencia) + línea vertical
+├── Por defecto: primeros 2 eventos + botón "Ver N más"
+├── Cada fila: título + tipo (pill) + N temas relacionados + badge de días restantes
+└── Clic en fila → abre EditEventModal
+```
+
+#### En Agenda (/agenda)
+
+```
+AgendaClient:
+├── Agrupa eventos por fecha, orden cronológico
+├── Filtros: por tipo (chips horizontales) + por materia (select)
+├── Toggle "Ver pasadas" → fetch lazy de los últimos 90 días
+├── Cada card: dot de color de materia + título + tipo + hora + aula + materia + N temas
+└── Clic → abre EditEventModal (edición in-situ)
+```
+
+#### En Calendario (/calendar)
+
+```
+CalendarClient:
+├── Vista mensual con grid de 7 columnas
+├── Días con eventos: puntos de color (rojo/amber/verde por urgencia del evento más urgente del día)
+├── Clic en día → panel inferior con detalle de eventos de ese día
+│     └── Cada evento: dot materia + título + tipo + badge días + hora + aula + N temas
+└── Clic en evento del panel → abre EditEventModal
+```
+
+---
+
+### EditEventModal — Edición, eliminación y duplicación
+
+```
+Abre cuando el usuario toca un evento existente desde Agenda, Calendario o pantalla de materia.
+
+Campos editables:
+  ├── Título
+  ├── Fecha
+  ├── Tipo (select)
+  ├── Materia (select, solo académicos)
+  ├── Temas del evento (acordeón, solo si materia seleccionada con topics)
+  ├── Hora (opcional)
+  └── Aula (opcional, solo académicos)
+
+Acciones:
+  ├── "Guardar cambios" → PATCH academic_events → callbacks onSaved()
+  ├── "Eliminar"        → DELETE academic_events → callbacks onDeleted()
+  └── "Duplicar"        → INSERT copia → callbacks onDuplicated()
+                          (la copia se agrega al estado local sin recargar la página)
+
+El estado local de cada pantalla (AgendaClient, CalendarClient, SubjectDetailClient)
+se actualiza optimísticamente mediante los callbacks onSaved/onDeleted/onDuplicated.
+No se recarga la página completa — solo se hace router.refresh() en casos puntuales.
+```
+
+---
+
+### Campo `notes` — formato JSON
+
+Los campos extras del evento se almacenan serializados en la columna `notes` (TEXT):
+
+```json
+{
+  "time":      "14:30",
+  "aula":      "204",
+  "topic_ids": ["uuid-1", "uuid-2", "uuid-3"]
+}
+```
+
+La función `parseNotes(notes)` / `parseEventNotes(notes)` deserializa este campo en cada componente de forma defensiva (try/catch → `{}` si falla).
+
+---
+
+### Integración con el plan IA y notificaciones
+
+```
+academic_events → calculateStudyPriorities()
+  └── Determina urgency_score por materia y estudio_mode (exam_prep / active_review / normal / light)
+  └── Claude recibe la lista de eventos próximos 30 días como contexto
+
+academic_events → checkAndScheduleAlerts()  (lib/notifications-engine.ts)
+  └── Genera deadline alerts en umbrales: 14 / 10 / 7 / 5 / 1 / 0 días antes del evento
+  └── Las alertas se persisten una sola vez (UNIQUE event_id + trigger_days_before)
+  └── Push notification se envía fire-and-forget al crear cada alerta nueva
+```
+
+---
+
+### Archivos involucrados
+
+| Archivo | Rol |
+|---------|-----|
+| [components/features/FabMenu.tsx](components/features/FabMenu.tsx) | `EventoModal` — creación rápida desde FAB |
+| [components/features/EditEventModal.tsx](components/features/EditEventModal.tsx) | Edición / eliminación / duplicación de eventos existentes |
+| [app/(app)/subjects/[id]/SubjectDetailClient.tsx](app/(app)/subjects/[id]/SubjectDetailClient.tsx) | Formulario inline de creación + sección "Fechas importantes" (timeline) |
+| [app/(app)/agenda/AgendaClient.tsx](app/(app)/agenda/AgendaClient.tsx) | Vista de lista cronológica + filtros + toggle pasados |
+| [app/(app)/calendar/CalendarClient.tsx](app/(app)/calendar/CalendarClient.tsx) | Vista mensual + panel detalle del día |
+| [app/(app)/agenda/page.tsx](app/(app)/agenda/page.tsx) | SSR: fetch de eventos futuros + subjects del semestre activo |
+| [app/(app)/calendar/page.tsx](app/(app)/calendar/page.tsx) | SSR: fetch de eventos futuros + subjectsData |
+| [lib/study-priority.ts](lib/study-priority.ts) | Consume academic_events para calcular urgencia y prioridad |
+| [lib/notifications-engine.ts](lib/notifications-engine.ts) | Genera deadline alerts a partir de academic_events |

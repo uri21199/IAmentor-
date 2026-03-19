@@ -74,6 +74,8 @@ export default function CheckInPage() {
   const [isEmployed, setIsEmployed] = useState<boolean | null>(null)
   const [subjects, setSubjects] = useState<{ id: string; name: string }[]>([])
   const [draftFound, setDraftFound] = useState(false)
+  // roundTrips[i] === true means segment i has a return leg at i+1
+  const [roundTrips, setRoundTrips] = useState<boolean[]>([])
   // Track whether this is the initial mount to suppress auto-save before hydration
   const isMounted = useRef(false)
 
@@ -185,9 +187,10 @@ export default function CheckInPage() {
       ...f,
       travel_route: [
         ...f.travel_route,
-        { origin: '', destination: '', duration_minutes: 30, departure_time: '', arrival_time: '' },
+        { origin: '', destination: '', duration_minutes: 60, departure_time: '08:00', arrival_time: '09:00' },
       ],
     }))
+    setRoundTrips(rt => [...rt, false])
   }
 
   function updateSegment(i: number, field: keyof TravelSegment, value: string | number) {
@@ -200,10 +203,63 @@ export default function CheckInPage() {
   }
 
   function removeSegment(i: number) {
-    setForm(f => ({
-      ...f,
-      travel_route: f.travel_route.filter((_, idx) => idx !== i),
-    }))
+    const hasReturn = roundTrips[i]
+    const isReturnLeg = i > 0 && roundTrips[i - 1]
+    setForm(f => {
+      let route = f.travel_route.filter((_, idx) => idx !== i)
+      if (hasReturn) route = route.filter((_, idx) => idx !== i) // return was at i+1, now at i
+      return { ...f, travel_route: route }
+    })
+    setRoundTrips(rt => {
+      const next = [...rt]
+      if (hasReturn) {
+        next.splice(i, 2)
+      } else if (isReturnLeg) {
+        next.splice(i, 1)
+        next[i - 1] = false
+      } else {
+        next.splice(i, 1)
+      }
+      return next
+    })
+  }
+
+  function toggleRoundTrip(i: number) {
+    const enabled = roundTrips[i]
+    if (!enabled) {
+      const seg = form.travel_route[i]
+      const returnSeg: TravelSegment = {
+        origin: seg.destination,
+        destination: seg.origin,
+        duration_minutes: seg.duration_minutes,
+        departure_time: '18:00',
+        arrival_time: '19:00',
+      }
+      setForm(f => ({
+        ...f,
+        travel_route: [
+          ...f.travel_route.slice(0, i + 1),
+          returnSeg,
+          ...f.travel_route.slice(i + 1),
+        ],
+      }))
+      setRoundTrips(rt => {
+        const next = [...rt]
+        next[i] = true
+        next.splice(i + 1, 0, false)
+        return next
+      })
+    } else {
+      setForm(f => ({
+        ...f,
+        travel_route: f.travel_route.filter((_, idx) => idx !== i + 1),
+      }))
+      setRoundTrips(rt => {
+        const next = rt.filter((_, idx) => idx !== i + 1)
+        next[i] = false
+        return next
+      })
+    }
   }
 
   async function handleSubmit() {
@@ -515,148 +571,168 @@ export default function CheckInPage() {
               </div>
             )}
 
-            {form.travel_route.map((seg, i) => (
-              <Card key={i} variant="elevated">
-                <div className="flex items-center justify-between mb-4">
-                  <p className="text-sm font-medium text-text-primary">🚌 Tramo {i + 1}</p>
-                  <button
-                    onClick={() => removeSegment(i)}
-                    className="w-8 h-8 flex items-center justify-center rounded-full bg-red-500/10 text-red-400 text-xs"
-                  >
-                    ✕
-                  </button>
-                </div>
-                <div className="space-y-4">
+            {form.travel_route.map((seg, i) => {
+              const isReturnLeg = i > 0 && roundTrips[i - 1]
+              const hasReturn   = roundTrips[i]
+              return (
+                <Card key={i} variant="elevated">
+                  {/* Card header */}
+                  <div className="flex items-center justify-between mb-4">
+                    <p className="text-sm font-medium text-text-primary">
+                      {isReturnLeg ? '↩ Vuelta' : `🚌 Tramo ${i - (roundTrips.slice(0, i).filter(Boolean).length)}`}
+                    </p>
+                    <button
+                      onClick={() => removeSegment(i)}
+                      className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary text-xs hover:bg-surface transition-colors"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div className="space-y-4">
 
-                  {/* Desde */}
-                  <div>
-                    <p className="text-xs text-text-secondary mb-2">Desde</p>
-                    <div className="flex flex-wrap gap-2 mb-2">
-                      {LOCATION_CHIPS.map(place => (
-                        <button
-                          key={place}
-                          type="button"
-                          onClick={() => updateSegment(i, 'origin', place)}
-                          className={`px-4 py-2.5 rounded-xl text-xs font-medium border transition-colors min-h-[44px] ${
-                            seg.origin === place
-                              ? 'border-primary bg-primary/20 text-primary'
-                              : 'border-border-subtle bg-surface text-text-secondary'
-                          }`}
-                        >
-                          {place}
-                        </button>
-                      ))}
-                      {(seg.origin === '' || LOCATION_CHIPS.includes(seg.origin)) && (
-                        <button
-                          type="button"
-                          onClick={() => updateSegment(i, 'origin', '__custom__')}
-                          className="px-4 py-2.5 rounded-xl text-xs font-medium border border-border-subtle bg-surface text-text-secondary min-h-[44px]"
-                        >
-                          + Otro
-                        </button>
+                    {/* Desde */}
+                    <div>
+                      <p className="text-xs text-text-secondary mb-2">Desde</p>
+                      <div className="flex flex-wrap gap-2 mb-2">
+                        {LOCATION_CHIPS.map(place => (
+                          <button
+                            key={place}
+                            type="button"
+                            onClick={() => updateSegment(i, 'origin', place)}
+                            className={`px-4 py-2.5 rounded-xl text-xs font-medium border transition-colors min-h-[44px] ${
+                              seg.origin === place
+                                ? 'border-primary bg-primary/20 text-primary'
+                                : 'border-border-subtle bg-surface text-text-secondary'
+                            }`}
+                          >
+                            {place}
+                          </button>
+                        ))}
+                        {(seg.origin === '' || LOCATION_CHIPS.includes(seg.origin)) && (
+                          <button
+                            type="button"
+                            onClick={() => updateSegment(i, 'origin', '__custom__')}
+                            className="px-4 py-2.5 rounded-xl text-xs font-medium border border-border-subtle bg-surface text-text-secondary min-h-[44px]"
+                          >
+                            + Otro
+                          </button>
+                        )}
+                      </div>
+                      {seg.origin !== '' && !LOCATION_CHIPS.includes(seg.origin) && (
+                        <input
+                          type="text"
+                          value={seg.origin === '__custom__' ? '' : seg.origin}
+                          onChange={e => updateSegment(i, 'origin', e.target.value || '__custom__')}
+                          placeholder="Lugar de origen"
+                          autoFocus
+                          className="w-full h-11 px-4 rounded-2xl bg-surface border border-border-subtle
+                                     text-sm text-text-primary placeholder-text-secondary
+                                     focus:outline-none focus:border-primary/60"
+                        />
                       )}
                     </div>
-                    {seg.origin !== '' && !LOCATION_CHIPS.includes(seg.origin) && (
-                      <input
-                        type="text"
-                        value={seg.origin === '__custom__' ? '' : seg.origin}
-                        onChange={e => updateSegment(i, 'origin', e.target.value || '__custom__')}
-                        placeholder="Lugar de origen"
-                        autoFocus
-                        className="w-full h-11 px-4 rounded-2xl bg-surface border border-border-subtle
-                                   text-sm text-text-primary placeholder-text-secondary
-                                   focus:outline-none focus:border-primary/60"
-                      />
-                    )}
-                  </div>
 
-                  {/* Hasta */}
-                  <div>
-                    <p className="text-xs text-text-secondary mb-2">Hasta</p>
-                    <div className="flex flex-wrap gap-2 mb-2">
-                      {LOCATION_CHIPS.map(place => (
-                        <button
-                          key={place}
-                          type="button"
-                          onClick={() => updateSegment(i, 'destination', place)}
-                          className={`px-4 py-2.5 rounded-xl text-xs font-medium border transition-colors min-h-[44px] ${
-                            seg.destination === place
-                              ? 'border-primary bg-primary/20 text-primary'
-                              : 'border-border-subtle bg-surface text-text-secondary'
-                          }`}
-                        >
-                          {place}
-                        </button>
-                      ))}
-                      {(seg.destination === '' || LOCATION_CHIPS.includes(seg.destination)) && (
-                        <button
-                          type="button"
-                          onClick={() => updateSegment(i, 'destination', '__custom__')}
-                          className="px-4 py-2.5 rounded-xl text-xs font-medium border border-border-subtle bg-surface text-text-secondary min-h-[44px]"
-                        >
-                          + Otro
-                        </button>
+                    {/* Hasta */}
+                    <div>
+                      <p className="text-xs text-text-secondary mb-2">Hasta</p>
+                      <div className="flex flex-wrap gap-2 mb-2">
+                        {LOCATION_CHIPS.map(place => (
+                          <button
+                            key={place}
+                            type="button"
+                            onClick={() => updateSegment(i, 'destination', place)}
+                            className={`px-4 py-2.5 rounded-xl text-xs font-medium border transition-colors min-h-[44px] ${
+                              seg.destination === place
+                                ? 'border-primary bg-primary/20 text-primary'
+                                : 'border-border-subtle bg-surface text-text-secondary'
+                            }`}
+                          >
+                            {place}
+                          </button>
+                        ))}
+                        {(seg.destination === '' || LOCATION_CHIPS.includes(seg.destination)) && (
+                          <button
+                            type="button"
+                            onClick={() => updateSegment(i, 'destination', '__custom__')}
+                            className="px-4 py-2.5 rounded-xl text-xs font-medium border border-border-subtle bg-surface text-text-secondary min-h-[44px]"
+                          >
+                            + Otro
+                          </button>
+                        )}
+                      </div>
+                      {seg.destination !== '' && !LOCATION_CHIPS.includes(seg.destination) && (
+                        <input
+                          type="text"
+                          value={seg.destination === '__custom__' ? '' : seg.destination}
+                          onChange={e => updateSegment(i, 'destination', e.target.value || '__custom__')}
+                          placeholder="Lugar de destino"
+                          className="w-full h-11 px-4 rounded-2xl bg-surface border border-border-subtle
+                                     text-sm text-text-primary placeholder-text-secondary
+                                     focus:outline-none focus:border-primary/60"
+                        />
                       )}
                     </div>
-                    {seg.destination !== '' && !LOCATION_CHIPS.includes(seg.destination) && (
-                      <input
-                        type="text"
-                        value={seg.destination === '__custom__' ? '' : seg.destination}
-                        onChange={e => updateSegment(i, 'destination', e.target.value || '__custom__')}
-                        placeholder="Lugar de destino"
-                        className="w-full h-11 px-4 rounded-2xl bg-surface border border-border-subtle
-                                   text-sm text-text-primary placeholder-text-secondary
-                                   focus:outline-none focus:border-primary/60"
-                      />
-                    )}
-                  </div>
 
-                  {/* Horario */}
-                  <div>
-                    <p className="text-xs text-text-secondary mb-2">Horario</p>
-                    <div className="flex items-end gap-3">
-                      <div className="flex-1">
-                        <p className="text-[10px] text-text-secondary mb-1">Salida</p>
-                        <input
-                          type="time"
-                          value={seg.departure_time || ''}
-                          onChange={e => {
-                            const dep = e.target.value
-                            updateSegment(i, 'departure_time', dep)
-                            const dur = calcDuration(dep, seg.arrival_time || '')
-                            updateSegment(i, 'duration_minutes', dur)
-                          }}
-                          className="w-full h-11 px-3 rounded-2xl bg-surface border border-border-subtle
-                                     text-sm text-text-primary focus:outline-none focus:border-primary/60"
-                        />
-                      </div>
-                      <span className="text-text-secondary mb-3">→</span>
-                      <div className="flex-1">
-                        <p className="text-[10px] text-text-secondary mb-1">Llegada</p>
-                        <input
-                          type="time"
-                          value={seg.arrival_time || ''}
-                          onChange={e => {
-                            const arr = e.target.value
-                            updateSegment(i, 'arrival_time', arr)
-                            const dur = calcDuration(seg.departure_time || '', arr)
-                            updateSegment(i, 'duration_minutes', dur)
-                          }}
-                          className="w-full h-11 px-3 rounded-2xl bg-surface border border-border-subtle
-                                     text-sm text-text-primary focus:outline-none focus:border-primary/60"
-                        />
+                    {/* Horario */}
+                    <div>
+                      <p className="text-xs text-text-secondary mb-2">Horario</p>
+                      <div className="flex items-end gap-3">
+                        <div className="flex-1">
+                          <p className="text-[10px] text-text-secondary mb-1">Salida</p>
+                          <input
+                            type="time"
+                            value={seg.departure_time || ''}
+                            onChange={e => {
+                              const dep = e.target.value
+                              updateSegment(i, 'departure_time', dep)
+                              const dur = calcDuration(dep, seg.arrival_time || '')
+                              updateSegment(i, 'duration_minutes', dur)
+                            }}
+                            className="w-full h-11 px-3 rounded-2xl bg-surface border border-border-subtle
+                                       text-sm text-text-primary focus:outline-none focus:border-primary/60"
+                          />
+                        </div>
+                        <span className="text-text-secondary mb-3">→</span>
+                        <div className="flex-1">
+                          <p className="text-[10px] text-text-secondary mb-1">Llegada</p>
+                          <input
+                            type="time"
+                            value={seg.arrival_time || ''}
+                            onChange={e => {
+                              const arr = e.target.value
+                              updateSegment(i, 'arrival_time', arr)
+                              const dur = calcDuration(seg.departure_time || '', arr)
+                              updateSegment(i, 'duration_minutes', dur)
+                            }}
+                            className="w-full h-11 px-3 rounded-2xl bg-surface border border-border-subtle
+                                       text-sm text-text-primary focus:outline-none focus:border-primary/60"
+                          />
+                        </div>
                       </div>
                     </div>
-                    {seg.departure_time && seg.arrival_time && (
-                      <p className="text-xs text-text-secondary mt-1.5 text-center">
-                        ⏱ {seg.duration_minutes} min de viaje
-                      </p>
-                    )}
-                  </div>
 
-                </div>
-              </Card>
-            ))}
+                    {/* Round-trip toggle (only on base legs) */}
+                    {!isReturnLeg && (
+                      <div className="flex items-center justify-between pt-1 border-t border-border-subtle">
+                        <p className="text-xs text-text-secondary">¿Ida y vuelta?</p>
+                        <button
+                          type="button"
+                          onClick={() => toggleRoundTrip(i)}
+                          className={`relative w-10 h-5 rounded-full transition-colors duration-200 ${
+                            hasReturn ? 'bg-primary' : 'bg-surface border border-border-subtle'
+                          }`}
+                        >
+                          <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${
+                            hasReturn ? 'translate-x-5' : 'translate-x-0.5'
+                          }`} />
+                        </button>
+                      </div>
+                    )}
+
+                  </div>
+                </Card>
+              )
+            })}
 
             <div className="space-y-2">
               <p className="text-sm font-medium text-text-secondary">¿Imprevistos a tener en cuenta?</p>
