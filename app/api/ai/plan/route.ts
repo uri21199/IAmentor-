@@ -1,15 +1,26 @@
 import { createServerSupabaseClient } from '@/lib/supabase-server'
 import { generateDailyPlanStream } from '@/lib/anthropic'
-import { calculateStudyPriorities } from '@/lib/study-priority'
+import { calculateStudyPriorities, buildClassLogBoosts } from '@/lib/study-priority'
+import { buildFixedBlocks } from '@/lib/fixed-blocks'
 import { getTodayEvents, refreshAccessToken } from '@/lib/google-calendar'
-import { format, subDays } from 'date-fns'
+import { format, subDays, addDays, differenceInDays, parseISO } from 'date-fns'
 import { getTodayArg, getDowArg } from '@/lib/utils'
-import type { PlanGenerationContext, SubjectWithDetails, TimeBlock, TravelSegment, MicroReview } from '@/types'
+import type {
+  PlanGenerationContext,
+  SubjectWithDetails,
+  TimeBlock,
+  AcademicEvent,
+  RecentClassLog,
+  MicroReview,
+} from '@/types'
 
 /** SSE helper – encodes a single event into a Uint8Array */
 function sseEvent(event: string, data: string): Uint8Array {
   return new TextEncoder().encode(`event: ${event}\ndata: ${data}\n\n`)
 }
+
+/** Event types considered academically important for plan adjustments */
+const ACADEMIC_EVENT_TYPES = ['parcial', 'parcial_intermedio', 'entrega_tp'] as const
 
 export async function POST() {
   const supabase = createServerSupabaseClient()
@@ -22,6 +33,7 @@ export async function POST() {
   // Use Argentina timezone — Vercel runs UTC, Argentina = UTC-3
   const today = getTodayArg()
   const todayDow = getDowArg() // 0=Sun, 1=Mon, ..., 6=Sat
+  const referenceDate = new Date()
 
   // ── 1. Get today's check-in ─────────────────────────────
   const { data: checkin } = await supabase
@@ -30,6 +42,8 @@ export async function POST() {
     .eq('user_id', user.id)
     .eq('date', today)
     .single()
+
+  const checkinExists = !!checkin
 
   const effectiveCheckin = checkin ?? {
     energy_level: 3,
@@ -43,7 +57,7 @@ export async function POST() {
     sleep_quality: 3,
   }
 
-  // ── 2. Get active semester with subjects ────────────────
+  // ── 2. Get active semester with subjects + topics ────────
   const { data: semester } = await supabase
     .from('semesters')
     .select('id')
@@ -52,7 +66,7 @@ export async function POST() {
     .single()
 
   let subjectsWithDetails: SubjectWithDetails[] = []
-  let academicEvents: any[] = []
+  let academicEvents: AcademicEvent[] = []
 
   if (semester) {
     const { data: subjects } = await supabase
@@ -84,18 +98,35 @@ export async function POST() {
       .lte('date', format(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), 'yyyy-MM-dd'))
       .order('date')
 
-    academicEvents = events || []
+    academicEvents = (events || []) as AcademicEvent[]
   }
 
-  // ── 3. Energy history (last 7 days) ─────────────────────
+  // ── 3. Today's and near-future important events ─────────
+  const tomorrow   = format(addDays(referenceDate, 1), 'yyyy-MM-dd')
+  const dayAfter   = format(addDays(referenceDate, 2), 'yyyy-MM-dd')
+
+  const todayAcademicEvent = academicEvents.find(
+    e => e.date === today && ACADEMIC_EVENT_TYPES.includes(e.type as any)
+  ) ?? null
+
+  const nextTwoDaysHaveEvent = academicEvents.some(
+    e => (e.date === tomorrow || e.date === dayAfter) &&
+         ACADEMIC_EVENT_TYPES.includes(e.type as any)
+  )
+
+  // Suppress study blocks when user has an exam/TP today but nothing critical coming up:
+  // their cognitive energy is concentrated on the present event, not future preparation.
+  const suppressStudyBlocks = todayAcademicEvent !== null && !nextTwoDaysHaveEvent
+
+  // ── 4. Energy history (last 7 days) ─────────────────────
   const { data: energyHistory } = await supabase
     .from('checkins')
     .select('date, energy_level')
     .eq('user_id', user.id)
-    .gte('date', format(subDays(new Date(), 7), 'yyyy-MM-dd'))
+    .gte('date', format(subDays(referenceDate, 7), 'yyyy-MM-dd'))
     .order('date')
 
-  // ── 4. Google Calendar events ───────────────────────────
+  // ── 5. Google Calendar events ───────────────────────────
   let calendarEvents: any[] = []
   const { data: integration } = await supabase
     .from('user_integrations')
@@ -120,130 +151,109 @@ export async function POST() {
     }
   }
 
-  // ── 5. Manually-edited blocks from existing plan ────────
-  const { data: existingPlan } = await supabase
-    .from('daily_plans')
-    .select('plan_json, completion_percentage')
+  // ── 6. Recent class logs (last 14 days) ─────────────────
+  const fourteenDaysAgo = format(subDays(referenceDate, 14), 'yyyy-MM-dd')
+  const { data: rawClassLogs } = await supabase
+    .from('class_logs')
+    .select('subject_id, date, topics_covered_json, understanding_level')
     .eq('user_id', user.id)
-    .eq('date', today)
-    .single()
+    .gte('date', fourteenDaysAgo)
+    .order('date', { ascending: false })
 
-  const manuallyEditedBlocks: TimeBlock[] = (existingPlan?.plan_json ?? [])
-    .filter((b: TimeBlock) => b.manually_edited && !b.deleted)
-
-  // ── 5b. Fixed blocks from user_config + class_schedule ──
-  const fixedBlocks: TimeBlock[] = [...manuallyEditedBlocks]
-
-  const [{ data: userConfig }, { data: todayClasses }] = await Promise.all([
-    supabase.from('user_config').select('*').eq('user_id', user.id).single(),
-    supabase
-      .from('class_schedule')
-      .select('*, subjects(name, color)')
-      .eq('user_id', user.id)
-      .eq('day_of_week', todayDow)
-      .eq('is_active', true)
-      .order('start_time'),
-  ])
-
-  if (userConfig) {
-    const workDays: number[] = userConfig.work_days_json || [1, 2, 3, 4, 5]
-    const isWorkDay = workDays.includes(todayDow)
-    if (isWorkDay && effectiveCheckin.work_mode !== 'no_work' && effectiveCheckin.work_mode !== 'libre') {
-      const workTitle = effectiveCheckin.work_mode === 'presencial' ? '💼 Trabajo presencial' : '🏠 Trabajo remoto'
-      fixedBlocks.push({
-        id: 'fixed_work',
-        start_time: userConfig.work_start,
-        end_time: userConfig.work_end,
-        type: 'work',
-        title: workTitle,
-        description: `Horario laboral — ${effectiveCheckin.work_mode}`,
-        completed: false,
-        priority: 'medium',
-      })
+  // Build a flat topic-ID → topic-object map across all subjects
+  const allTopicsMap = new Map<string, { id: string; name: string }>()
+  for (const subject of subjectsWithDetails) {
+    for (const unit of subject.units) {
+      for (const topic of unit.topics) {
+        allTopicsMap.set(topic.id, { id: topic.id, name: topic.name })
+      }
     }
   }
 
-  if (effectiveCheckin.has_faculty) {
-    for (const cls of (todayClasses || [])) {
-      fixedBlocks.push({
-        id: `fixed_class_${cls.id}`,
-        start_time: cls.start_time,
-        end_time: cls.end_time,
-        type: 'class',
-        title: `Clase: ${cls.subjects?.name || 'Materia'}`,
-        description: `${cls.modality === 'presencial' ? '🏫 Presencial' : '💻 Virtual'} — ${cls.subjects?.name || 'Materia'}`,
-        subject_id: cls.subject_id,
-        completed: false,
-        priority: 'high',
-      })
-    }
+  const subjectNameMap = new Map<string, string>(
+    subjectsWithDetails.map(s => [s.id, s.name])
+  )
+
+  const recentClassLogs: RecentClassLog[] = (rawClassLogs ?? []).map(log => ({
+    subject_id: log.subject_id,
+    subject_name: subjectNameMap.get(log.subject_id) ?? 'Materia desconocida',
+    date: log.date,
+    days_ago: differenceInDays(referenceDate, parseISO(log.date)),
+    understanding_level: log.understanding_level,
+    topics: (log.topics_covered_json as string[])
+      .map(id => allTopicsMap.get(id))
+      .filter((t): t is { id: string; name: string } => t !== undefined),
+  }))
+
+  const classLogBoosts = buildClassLogBoosts(rawClassLogs ?? [], referenceDate)
+
+  // ── 7. Load existing plan + user config + classes ────────
+  const [{ data: existingPlan }, { data: userConfig }, { data: todayClasses }] =
+    await Promise.all([
+      supabase
+        .from('daily_plans')
+        .select('plan_json, completion_percentage')
+        .eq('user_id', user.id)
+        .eq('date', today)
+        .single(),
+      supabase.from('user_config').select('*').eq('user_id', user.id).single(),
+      supabase
+        .from('class_schedule')
+        .select('*, subjects(name, color)')
+        .eq('user_id', user.id)
+        .eq('day_of_week', todayDow)
+        .eq('is_active', true)
+        .order('start_time'),
+    ])
+
+  // ── 8. Preserve completed and manually-edited blocks ────
+  const existingPlanBlocks: TimeBlock[] = existingPlan?.plan_json ?? []
+  const existingBlockById = new Map(existingPlanBlocks.map(b => [b.id, b]))
+
+  // Manually-edited blocks are kept as fixed (existing behavior)
+  const manuallyEditedBlocks = existingPlanBlocks.filter(b => b.manually_edited && !b.deleted)
+
+  // Completed AI-generated blocks are also kept as fixed — they represent
+  // work already done and must NOT be discarded or regenerated.
+  // Fixed/travel blocks are excluded here because they are rebuilt by buildFixedBlocks
+  // and get their completed state restored individually below.
+  const completedAiBlocks = existingPlanBlocks.filter(b =>
+    b.completed &&
+    !b.deleted &&
+    !b.manually_edited &&
+    !b.id.startsWith('fixed_') &&
+    !b.id.startsWith('travel_')
+  )
+
+  const preservedBlocks = [...manuallyEditedBlocks, ...completedAiBlocks]
+
+  // ── 9. Build fixed blocks (work + classes + travel + exam) ─
+  const { fixedBlocks, travelBlockIds } = buildFixedBlocks(
+    todayDow,
+    effectiveCheckin,
+    checkinExists,
+    userConfig,
+    todayClasses ?? [],
+    preservedBlocks,
+    todayAcademicEvent,
+  )
+
+  // Restore completed state for structural fixed blocks (work, class, travel)
+  // so a completed work/class block stays completed after regeneration.
+  for (const block of fixedBlocks) {
+    const prev = existingBlockById.get(block.id)
+    if (prev?.completed) block.completed = true
   }
 
-  // ── 5c. Travel blocks (deterministic) ──────────────────
-  const addMins = (t: string, m: number): string => {
-    const [h, min] = t.split(':').map(Number)
-    const tot = h * 60 + min + m
-    return `${String(Math.floor(tot / 60) % 24).padStart(2, '0')}:${String(tot % 60).padStart(2, '0')}`
-  }
-  const subMins = (t: string, m: number): string => {
-    const [h, min] = t.split(':').map(Number)
-    const tot = Math.max(0, h * 60 + min - m)
-    return `${String(Math.floor(tot / 60)).padStart(2, '0')}:${String(tot % 60).padStart(2, '0')}`
-  }
-
-  const travelSegments: TravelSegment[] = effectiveCheckin.travel_route_json || []
-  const travelBlockIds: string[] = []
-
-  if (travelSegments.length > 0) {
-    const sortedFixed = [...fixedBlocks].sort((a, b) => a.start_time.localeCompare(b.start_time))
-    const firstStart = sortedFixed[0]?.start_time || '09:00'
-    const lastEnd = sortedFixed[sortedFixed.length - 1]?.end_time || '18:00'
-
-    const preSegs = travelSegments.slice(0, -1)
-    const totalPreMins = preSegs.reduce((s, seg) => s + seg.duration_minutes, 0)
-    let cursor = subMins(firstStart, totalPreMins)
-
-    preSegs.forEach((seg, i) => {
-      const end = addMins(cursor, seg.duration_minutes)
-      const id = `travel_${i + 1}`
-      travelBlockIds.push(id)
-      fixedBlocks.push({
-        id,
-        start_time: cursor,
-        end_time: end,
-        type: 'travel',
-        title: `🚌 ${seg.origin} → ${seg.destination}`,
-        description: `Viaje ${seg.duration_minutes} min — repasá teoría mientras viajás`,
-        travel_segment: seg,
-        completed: false,
-        priority: 'low',
-      })
-      cursor = end
-    })
-
-    const returnSeg = travelSegments[travelSegments.length - 1]
-    const returnId = `travel_${travelSegments.length}`
-    travelBlockIds.push(returnId)
-    fixedBlocks.push({
-      id: returnId,
-      start_time: lastEnd,
-      end_time: addMins(lastEnd, returnSeg.duration_minutes),
-      type: 'travel',
-      title: `🚌 ${returnSeg.origin} → ${returnSeg.destination}`,
-      description: `Viaje ${returnSeg.duration_minutes} min — repasá teoría mientras viajás`,
-      travel_segment: returnSeg,
-      completed: false,
-      priority: 'low',
-    })
-  }
-
-  // ── 6. Calculate study priorities ──────────────────────
+  // ── 10. Calculate study priorities ─────────────────────
   const studyPriorities = calculateStudyPriorities({
     subjects: subjectsWithDetails,
     academic_events: academicEvents,
+    reference_date: referenceDate,
+    class_log_boosts: classLogBoosts,
   })
 
-  // ── 7. Build context ────────────────────────────────────
+  // ── 11. Build full context ──────────────────────────────
   const context: PlanGenerationContext = {
     checkin: effectiveCheckin as any,
     calendar_events: calendarEvents,
@@ -252,11 +262,12 @@ export async function POST() {
     energy_history: energyHistory || [],
     study_priorities: studyPriorities,
     fixed_blocks: fixedBlocks,
+    recent_class_logs: recentClassLogs,
+    today_academic_event: todayAcademicEvent,
+    suppress_study_blocks: suppressStudyBlocks,
   }
 
-  const existingCompletion = existingPlan?.completion_percentage ?? 0
-
-  // ── 8. Stream SSE response ──────────────────────────────
+  // ── 12. Stream SSE response ─────────────────────────────
   const stream = new ReadableStream({
     async start(controller) {
       const send = (event: string, data: unknown) => {
@@ -272,7 +283,6 @@ export async function POST() {
 
         for await (const item of generateDailyPlanStream(context, travelBlockIds)) {
           if ((item as any).type === 'travel_micro_review') {
-            // Attach micro_review to the corresponding travel block and send update
             const ev = item as { type: 'travel_micro_review'; travel_block_id: string; micro_review: MicroReview }
             send('update_block', { id: ev.travel_block_id, micro_review: ev.micro_review })
           } else {
@@ -283,15 +293,22 @@ export async function POST() {
           }
         }
 
-        // Save merged plan to DB (fire-and-forget inside the stream)
+        // Merge and sort all blocks
         const allBlocks = [...fixedBlocks, ...claudeBlocks].sort((a, b) =>
           a.start_time.localeCompare(b.start_time)
         )
+
+        // Recalculate completion % from actual completed state of all blocks
+        const activeBlocks = allBlocks.filter(b => !b.deleted)
+        const completionPct = activeBlocks.length > 0
+          ? Math.round((activeBlocks.filter(b => b.completed).length / activeBlocks.length) * 100)
+          : 0
+
         await supabase.from('daily_plans').upsert({
           user_id: user!.id,
           date: today,
           plan_json: allBlocks,
-          completion_percentage: existingCompletion,
+          completion_percentage: completionPct,
         })
 
         send('done', 'complete')
@@ -309,7 +326,7 @@ export async function POST() {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
       'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no', // Disable Nginx buffering on Vercel
+      'X-Accel-Buffering': 'no',
     },
   })
 }

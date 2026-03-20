@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase'
 
-const NAV_SECTIONS = [
+export const NAV_SECTIONS = [
   {
     items: [
       {
@@ -202,7 +202,7 @@ export default function SideDrawer({ isOpen, onClose, userEmail, notificationUnr
         )}
       >
         {/* Drawer header */}
-        <div className="flex items-center justify-between px-5 pt-12 pb-5 border-b border-border-subtle">
+        <div className="flex items-center justify-between px-5 pb-5 border-b border-border-subtle" style={{ paddingTop: 'max(env(safe-area-inset-top, 0px), 3rem)' }}>
           <div>
             <p className="text-base font-bold text-text-primary">Mentor IA</p>
             {userEmail && (
@@ -211,7 +211,7 @@ export default function SideDrawer({ isOpen, onClose, userEmail, notificationUnr
           </div>
           <button
             onClick={onClose}
-            className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary"
+            className="w-11 h-11 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary hover:text-text-primary transition-colors"
             aria-label="Cerrar menú"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -265,7 +265,7 @@ export default function SideDrawer({ isOpen, onClose, userEmail, notificationUnr
         </nav>
 
         {/* Drawer footer */}
-        <div className="px-4 py-4 border-t border-border-subtle space-y-3">
+        <div className="px-4 pt-4 pb-safe-4 border-t border-border-subtle space-y-3">
           <button
             onClick={handleSignOut}
             className="w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl text-sm font-medium text-red-400 hover:bg-red-500/10 transition-colors"

@@ -170,7 +170,7 @@ export default function CursadaPage() {
   const activeDays = WEEK_DAYS.filter(d => classesByDay[d].length > 0)
 
   return (
-    <div className="px-4 pt-5 pb-28 space-y-5 max-w-lg mx-auto">
+    <div className="px-4 pt-5 pb-28 space-y-5 max-w-lg mx-auto md:max-w-2xl md:px-6">
 
       {/* ── Stats strip ───────────────────────────────────────── */}
       <div className="grid grid-cols-3 gap-3">

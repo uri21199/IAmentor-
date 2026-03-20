@@ -22,7 +22,7 @@ export default async function SubjectsPage() {
 
   if (!semester) {
     return (
-      <div className="px-4 pt-6 max-w-lg mx-auto text-center py-20">
+      <div className="px-4 pt-6 max-w-lg mx-auto md:max-w-3xl text-center py-20">
         <p className="text-4xl mb-4">📚</p>
         <h2 className="text-xl font-bold text-text-primary mb-2">Sin cuatrimestre activo</h2>
         <p className="text-text-secondary text-sm mb-2">
@@ -65,7 +65,7 @@ export default async function SubjectsPage() {
     .order('date', { ascending: true })
 
   return (
-    <div className="px-4 pt-4 pb-28 max-w-lg mx-auto">
+    <div className="px-4 pt-4 pb-28 max-w-lg mx-auto md:max-w-3xl md:px-6 lg:max-w-4xl">
       <SubjectsClient
         semesterId={semester.id}
         semesterName={semester.name}

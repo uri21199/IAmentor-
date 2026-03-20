@@ -636,7 +636,7 @@ export default function SubjectDetailClient({ subject, events, classLogs, today,
   const modalInput  = 'w-full h-11 px-4 rounded-2xl bg-surface-2 border border-border-subtle text-sm text-text-primary placeholder-text-secondary focus:outline-none focus:border-primary/60'
 
   return (
-    <div className="px-4 pt-4 pb-28 space-y-5 max-w-lg mx-auto">
+    <div className="px-4 pt-4 pb-28 space-y-5 max-w-lg mx-auto md:max-w-3xl md:px-6">
 
       {/* Header */}
       <div className="flex items-center gap-3">

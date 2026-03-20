@@ -34,6 +34,7 @@ function encodeNotes(extra: Record<string, unknown>): string {
 
 // ── Imprevisto Modal ──────────────────────────────────────────────────────────
 function ImprevistoModal({ onClose }: { onClose: () => void }) {
+  const router = useRouter()
   const [text, setText] = useState('')
   const [loading, setLoading] = useState(false)
   const [success, setSuccess] = useState(false)
@@ -51,7 +52,7 @@ function ImprevistoModal({ onClose }: { onClose: () => void }) {
       setSuccess(true)
       setTimeout(() => {
         onClose()
-        window.location.reload()
+        router.refresh()
       }, 1500)
     } catch {
       // silent
@@ -836,7 +837,7 @@ function ModalShell({ title, onClose, children }: { title: string; onClose: () =
           <h3 className="text-base font-semibold text-text-primary">{title}</h3>
           <button
             onClick={onClose}
-            className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary"
+            className="w-11 h-11 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary hover:text-text-primary transition-colors"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -903,7 +904,8 @@ export default function FabMenu({ subjectsData, userId }: Props) {
       {/* FAB */}
       <button
         onClick={() => setModal('menu')}
-        className="fixed bottom-6 right-4 z-40 w-14 h-14 rounded-full bg-primary text-white shadow-xl shadow-primary/30 flex items-center justify-center active:scale-95 transition-transform"
+        className="fixed right-4 md:right-8 z-40 w-14 h-14 rounded-full bg-primary text-white shadow-xl shadow-primary/30 flex items-center justify-center active:scale-95 transition-transform"
+        style={{ bottom: 'max(1.5rem, calc(env(safe-area-inset-bottom, 0px) + 1rem))' }}
         aria-label="Agregar"
       >
         <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -920,7 +922,7 @@ export default function FabMenu({ subjectsData, userId }: Props) {
           >
             <div className="px-5 pt-5 pb-4 border-b border-border-subtle flex items-center justify-between">
               <p className="text-sm font-semibold text-text-primary">Agregar</p>
-              <button onClick={close} className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary">
+              <button onClick={close} className="w-11 h-11 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary hover:text-text-primary transition-colors">
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                 </svg>

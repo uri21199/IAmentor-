@@ -51,7 +51,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="px-4 pt-5 pb-28 space-y-5 max-w-lg mx-auto">
+    <div className="px-4 pt-5 pb-28 space-y-5 max-w-lg mx-auto md:max-w-2xl md:px-6">
 
       {/* Header */}
       <div>

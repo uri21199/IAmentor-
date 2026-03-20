@@ -41,7 +41,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   }))
 
   return (
-    <div className="min-h-dvh bg-background flex flex-col">
+    <div className="bg-background">
       <AppShell userEmail={user.email}>
         {children}
       </AppShell>

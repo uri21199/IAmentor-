@@ -69,7 +69,7 @@ export default function NotificationsPage() {
     : notifications
 
   return (
-    <div className="max-w-lg mx-auto px-4 pt-4 pb-24">
+    <div className="max-w-lg mx-auto px-4 pt-4 pb-24 md:max-w-2xl md:px-6">
 
       {/* Header row */}
       <div className="flex items-center justify-between mb-4">

@@ -22,6 +22,11 @@ export interface PriorityInput {
   subjects: SubjectWithDetails[]
   academic_events: AcademicEvent[]
   reference_date?: Date  // defaults to today — injectable for testing
+  /**
+   * Pre-computed boost scores per topic ID, derived from recent class logs.
+   * Build this map with buildClassLogBoosts() before calling calculateStudyPriorities().
+   */
+  class_log_boosts?: Map<string, number>
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -88,16 +93,87 @@ export function calculateEventUrgencyScore(
 
 /**
  * Returns score contribution from topic comprehension status.
+ *
+ * When referenceDate is provided, red topics also receive a stagnation bonus:
+ * +0.5 per day without studying, capped at +15. A topic never studied counts
+ * as 30 days stagnant (maximum penalty).
+ *
+ * When classLogBoosts is provided, each topic's individual boost (from recent
+ * class exposure with low understanding) is added on top.
  */
-export function calculateTopicWeaknessScore(topics: Topic[]): number {
+export function calculateTopicWeaknessScore(
+  topics: Topic[],
+  referenceDate?: Date,
+  classLogBoosts?: Map<string, number>,
+): number {
   return topics.reduce((acc, topic) => {
+    let score = 0
+
     switch (topic.status as TopicStatus) {
-      case 'red':    return acc + WEIGHT.RED_TOPIC_SCORE
-      case 'yellow': return acc + WEIGHT.YELLOW_TOPIC_SCORE
-      case 'green':  return acc + WEIGHT.GREEN_TOPIC_SCORE
-      default:       return acc
+      case 'red': {
+        score = WEIGHT.RED_TOPIC_SCORE
+        if (referenceDate) {
+          const daysSince = topic.last_studied
+            ? differenceInDays(referenceDate, parseISO(topic.last_studied))
+            : 30  // never studied → treat as 30 days stagnant
+          score += Math.min(daysSince * 0.5, 15)
+        }
+        break
+      }
+      case 'yellow':
+        score = WEIGHT.YELLOW_TOPIC_SCORE
+        break
+      case 'green':
+        score = WEIGHT.GREEN_TOPIC_SCORE
+        break
+      default:
+        break
     }
+
+    // Class log boost: recently seen in class with low understanding → bumps priority
+    if (classLogBoosts?.has(topic.id)) {
+      score += classLogBoosts.get(topic.id)!
+    }
+
+    return acc + score
   }, 0)
+}
+
+/**
+ * Builds a Map<topicId, boostScore> from recent class logs.
+ *
+ * Boost formula per log entry:
+ *   boost = (5 - understanding_level) * recencyFactor * 8
+ *   recencyFactor = max(0, 1 - daysAgo / 14)
+ *
+ * Examples:
+ *   - Seen 1 day ago, understanding 1/5 → boost ≈ 32
+ *   - Seen 7 days ago, understanding 3/5 → boost ≈ 8
+ *   - Seen 14+ days ago → boost = 0 (decayed)
+ *
+ * Multiple logs for the same topic accumulate.
+ */
+export function buildClassLogBoosts(
+  classLogs: Array<{ date: string; understanding_level: number; topics_covered_json: string[] }>,
+  referenceDate: Date,
+): Map<string, number> {
+  const boosts = new Map<string, number>()
+
+  for (const log of classLogs) {
+    const daysAgo = differenceInDays(referenceDate, parseISO(log.date))
+    if (daysAgo < 0) continue  // future-dated logs — skip
+
+    const recencyFactor = Math.max(0, 1 - daysAgo / 14)
+    if (recencyFactor === 0) continue  // fully decayed
+
+    const boost = (5 - log.understanding_level) * recencyFactor * 8
+
+    for (const topicId of log.topics_covered_json) {
+      boosts.set(topicId, (boosts.get(topicId) ?? 0) + boost)
+    }
+  }
+
+  return boosts
 }
 
 /**
@@ -148,7 +224,11 @@ export function calculateStudyPriorities(input: PriorityInput): StudyPriorityRes
       referenceDate
     )
 
-    const weaknessScore = calculateTopicWeaknessScore(allTopics)
+    const weaknessScore = calculateTopicWeaknessScore(
+      allTopics,
+      referenceDate,
+      input.class_log_boosts,
+    )
     const priorityScore = eventScore + weaknessScore
 
     const studyMode = determineStudyMode(daysToEvent)

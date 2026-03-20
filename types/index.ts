@@ -89,7 +89,7 @@ export interface CheckIn {
   created_at: string
 }
 
-export type BlockType = 'work' | 'class' | 'study' | 'travel' | 'gym' | 'rest' | 'free'
+export type BlockType = 'work' | 'class' | 'study' | 'travel' | 'gym' | 'rest' | 'free' | 'exam'
 
 export interface TimeBlock {
   id: string
@@ -211,6 +211,17 @@ export interface StudyPriorityResult {
   study_mode: 'exam_prep' | 'active_review' | 'normal' | 'light'
 }
 
+export interface RecentClassLog {
+  subject_id: string
+  subject_name: string
+  /** YYYY-MM-DD */
+  date: string
+  days_ago: number
+  /** 1–5, lower = more urgent to review */
+  understanding_level: number
+  topics: { id: string; name: string }[]
+}
+
 export interface PlanGenerationContext {
   checkin: CheckIn
   calendar_events: GoogleCalendarEvent[]
@@ -219,6 +230,19 @@ export interface PlanGenerationContext {
   energy_history: { date: string; energy_level: number }[]
   study_priorities: StudyPriorityResult[]
   fixed_blocks: TimeBlock[]
+  /** Class logs from the last 14 days, enriched with topic names */
+  recent_class_logs: RecentClassLog[]
+  /**
+   * Most urgent academic event scheduled for today (parcial, TP, etc.).
+   * Null when no such event exists today.
+   */
+  today_academic_event: AcademicEvent | null
+  /**
+   * True when today has an academic event AND the next 2 days do NOT.
+   * When true the prompt instructs Claude to suppress study blocks —
+   * the user's cognitive energy is focused on today's event.
+   */
+  suppress_study_blocks: boolean
 }
 
 // ============================================================

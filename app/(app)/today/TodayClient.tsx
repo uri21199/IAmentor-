@@ -6,7 +6,6 @@ import { format, parseISO, differenceInDays, startOfDay } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { createClient } from '@/lib/supabase'
 import { Badge } from '@/components/ui/Badge'
-import { ProgressBar } from '@/components/ui/ProgressBar'
 import Button from '@/components/ui/Button'
 import { getGreeting, blockTypeColor, blockTypeIcon } from '@/lib/utils'
 import { getDaysColor as getColor } from '@/lib/study-priority'
@@ -109,11 +108,12 @@ function computeColumns(blocks: TimeBlockType[]): Array<TimeBlockType & { col: n
 const BLOCK_STYLE: Record<string, { bg: string; border: string; text: string; dot: string }> = {
   work:   { bg: 'bg-blue-500/15',    border: 'border-blue-500/30',    text: 'text-blue-300',    dot: 'bg-blue-400' },
   class:  { bg: 'bg-cyan-500/15',    border: 'border-cyan-500/30',    text: 'text-cyan-300',    dot: 'bg-cyan-400' },
-  study:  { bg: 'bg-violet-500/15',  border: 'border-violet-500/30',  text: 'text-violet-300',  dot: 'bg-violet-400' },
+  study:  { bg: 'bg-amber-500/15',   border: 'border-amber-500/30',   text: 'text-amber-300',   dot: 'bg-amber-400' },
   travel: { bg: 'bg-amber-500/15',   border: 'border-amber-500/30',   text: 'text-amber-300',   dot: 'bg-amber-400' },
   gym:    { bg: 'bg-green-500/15',   border: 'border-green-500/30',   text: 'text-green-300',   dot: 'bg-green-400' },
   rest:   { bg: 'bg-surface-2',      border: 'border-border-subtle',  text: 'text-text-secondary', dot: 'bg-surface' },
   free:   { bg: 'bg-surface-2',      border: 'border-border-subtle',  text: 'text-text-secondary', dot: 'bg-surface' },
+  exam:   { bg: 'bg-red-500/15',     border: 'border-red-500/40',     text: 'text-red-300',         dot: 'bg-red-400' },
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -128,8 +128,9 @@ export default function TodayClient({
   actionParam,
   subjectsData = [],
 }: Props) {
-  const supabase = createClient()
-  const gridRef  = useRef<HTMLDivElement>(null)
+  const supabase     = createClient()
+  const gridRef      = useRef<HTMLDivElement>(null)
+  const scrollTopRef = useRef(0)
 
   const [blocks, setBlocks] = useState<TimeBlockType[]>(plan?.plan_json || [])
   const [generating, setGenerating] = useState(false)
@@ -165,6 +166,12 @@ export default function TodayClient({
   const greeting  = getGreeting()
   const dateLabelRaw = format(parseISO(today), "EEEE d 'de' MMMM", { locale: es })
   const dateLabel = dateLabelRaw.charAt(0).toUpperCase() + dateLabelRaw.slice(1)
+
+  // Detect if today has an important academic event (parcial, TP, etc.)
+  const IMPORTANT_EVENT_TYPES = ['parcial', 'parcial_intermedio', 'entrega_tp']
+  const todayImportantEvent = localUpcoming.find(
+    (e: any) => e.date === today && IMPORTANT_EVENT_TYPES.includes(e.type)
+  ) ?? null
 
   // ── Scroll to current time on mount ──────────────────────────────────────
   useEffect(() => {
@@ -269,13 +276,33 @@ export default function TodayClient({
       if (err.name !== 'AbortError') console.error('Plan stream error:', err)
     } finally {
       setGenerating(false)
+      // Recalculate completion % from the final accumulated blocks.
+      // The API preserves completed blocks so the count here is authoritative.
+      if (accumulated.length > 0) {
+        const active = accumulated.filter(b => !b.deleted)
+        const pct = active.length > 0
+          ? Math.round((active.filter(b => b.completed).length / active.length) * 100)
+          : 0
+        setCompletion(pct)
+      }
     }
   }
 
   async function generatePlan() {
+    scrollTopRef.current = gridRef.current?.scrollTop ?? 0
+    const prevCompletion = completion
     setBlocks([])
+    setCompletion(prevCompletion) // keep % visible while new plan streams in
     await consumePlanStream()
   }
+
+  // Restore scroll position after blocks re-render following regeneration
+  useEffect(() => {
+    if (blocks.length > 0 && scrollTopRef.current > 0 && gridRef.current) {
+      gridRef.current.scrollTop = scrollTopRef.current
+      scrollTopRef.current = 0
+    }
+  }, [blocks.length > 0])
 
   async function handleReplan() {
     setGenerating(true)
@@ -430,32 +457,45 @@ export default function TodayClient({
     : false
 
   // ── Render ────────────────────────────────────────────────────────────────
-  const displayBlocks = checkin ? blocks.filter(b => !b.deleted) : previewBlocks
-  const displayBlocksWithCols = computeColumns(displayBlocks)
+  const displayBlocks = useMemo(
+    () => blocks.length > 0 ? blocks.filter(b => !b.deleted) : previewBlocks,
+    [blocks, previewBlocks]
+  )
+  const displayBlocksWithCols = useMemo(
+    () => computeColumns(displayBlocks),
+    [displayBlocks]
+  )
+  const hasTodayStudyBlock = useMemo(
+    () => displayBlocks.some(b => b.type === 'study'),
+    [displayBlocks]
+  )
 
   return (
-    <div className="flex flex-col max-w-lg mx-auto">
+    <div className="flex flex-col max-w-lg mx-auto md:max-w-2xl lg:max-w-3xl">
 
       {/* ── Header strip ────────────────────────────────────────────────────── */}
-      <div className="px-4 pt-4 pb-3 flex items-center justify-between gap-3">
-        <div>
-          <p className="text-xs text-text-secondary">{dateLabel}</p>
-          <p className="text-lg font-bold text-text-primary mt-0.5">{greeting}</p>
+      <div className="px-4 pt-3 pb-2 flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-base font-bold text-text-primary leading-snug">
+            {greeting}
+            <span className="text-xs font-normal text-text-secondary ml-2">{dateLabel}</span>
+          </p>
         </div>
 
         <div className="flex items-center gap-2">
           {/* Completion badge */}
-          {checkin && blocks.length > 0 && (
+          {blocks.length > 0 && (
             <div className="flex flex-col items-center bg-surface-2 border border-border-subtle rounded-2xl px-3 py-1.5 min-w-[52px]">
               <span className="text-base font-bold text-primary leading-none">{Math.round(completion)}%</span>
               <span className="text-[9px] text-text-secondary mt-0.5">hoy</span>
             </div>
           )}
           {/* Regenerate button */}
-          {checkin && blocks.length > 0 && (
+          {blocks.length > 0 && (
             <button
               onClick={generatePlan}
               disabled={generating}
+              aria-label="Regenerar plan (conserva los bloques completados)"
               className="w-9 h-9 rounded-xl bg-surface-2 border border-border-subtle flex items-center justify-center text-text-secondary hover:text-text-primary transition-colors disabled:opacity-40"
               title="Regenerar plan"
             >
@@ -467,30 +507,41 @@ export default function TodayClient({
         </div>
       </div>
 
-      {/* Progress bar */}
-      {checkin && blocks.length > 0 && (
-        <div className="px-4 pb-2">
-          <ProgressBar value={completion} color="primary" size="sm" />
+
+
+      {/* ── Important event today banner (compact chip) ──────────────────────── */}
+      {todayImportantEvent && (
+        <div className="mx-4 mb-2 flex items-center gap-2 px-3 py-1.5 rounded-2xl bg-amber-500/10 border border-amber-500/35">
+          <svg className="w-3.5 h-3.5 text-amber-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+          </svg>
+          <p className="text-xs font-semibold text-amber-300 shrink-0">
+            {TYPE_LABELS[todayImportantEvent.type] ?? todayImportantEvent.type}:
+          </p>
+          <p className="text-xs text-amber-200/80 truncate flex-1" title={todayImportantEvent.title}>
+            {todayImportantEvent.title}
+          </p>
+          {!checkin ? (
+            <Link href="/checkin" className="text-xs font-medium text-amber-300 shrink-0 underline underline-offset-2">
+              Check-in
+            </Link>
+          ) : (
+            <Badge variant="exam-today">HOY</Badge>
+          )}
         </div>
       )}
 
-
       {/* ── Check-in CTA ─────────────────────────────────────────────────────── */}
-      {!checkin && (
-        <div className="mx-4 mb-3 rounded-3xl p-4 bg-primary/10 border border-primary/25">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-9 h-9 rounded-xl bg-primary/20 flex items-center justify-center shrink-0">
-              <svg className="w-4 h-4 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
-              </svg>
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-text-primary">Check-in matutino</p>
-              <p className="text-xs text-text-secondary">Completalo para personalizar tu plan</p>
-            </div>
+      {!checkin && !todayImportantEvent && (
+        <div className="mx-4 mb-2 flex items-center gap-3 px-3 py-2.5 rounded-2xl bg-primary/10 border border-primary/25">
+          <div className="w-7 h-7 rounded-lg bg-primary/20 flex items-center justify-center shrink-0">
+            <svg className="w-3.5 h-3.5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+            </svg>
           </div>
-          <Link href="/checkin">
-            <Button variant="primary" size="md" className="w-full">Hacer check-in ahora</Button>
+          <p className="text-xs font-medium text-text-secondary flex-1">Personaliza tu plan con el check-in matutino</p>
+          <Link href="/checkin" className="text-xs font-semibold text-primary shrink-0 px-2.5 py-1.5 rounded-lg bg-primary/15 hover:bg-primary/25 transition-colors">
+            Hacer →
           </Link>
         </div>
       )}
@@ -527,12 +578,22 @@ export default function TodayClient({
         </div>
       )}
 
+      {/* Study-suppressed notice — exam day with no study blocks generated */}
+      {!generating && todayImportantEvent && !hasTodayStudyBlock && blocks.length > 0 && (
+        <div className="mx-4 mb-2 flex items-center gap-2 px-3 py-2.5 rounded-2xl bg-amber-500/8 border border-amber-500/20">
+          <svg className="w-3.5 h-3.5 text-amber-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <p className="text-xs text-amber-300/80">Bloques de estudio suprimidos — concentración total en el evento de hoy.</p>
+        </div>
+      )}
+
       {/* ── Hourly timeline grid ──────────────────────────────────────────────── */}
       {displayBlocksWithCols.length > 0 && (
         <div
           ref={gridRef}
-          className="overflow-y-auto px-4 pt-3 pb-32"
-          style={{ maxHeight: 'calc(100dvh - 200px)' }}
+          className="overflow-y-auto px-4 pt-3 pb-24 md:pb-8"
+          style={{ maxHeight: 'calc(100dvh - 12rem)' }}
         >
           <div className="relative" style={{ height: `${(GRID_END - GRID_START) * HOUR_PX}px` }}>
 
@@ -601,7 +662,7 @@ export default function TodayClient({
                   onPointerCancel={!isPreview ? handleDragEnd : undefined}
                   onClick={() => !isPreview && !dragMovedRef.current && openEdit(block)}
                   className={`absolute rounded-2xl border px-2.5 py-1.5 text-left ${style.bg} ${style.border} ${block.manually_edited ? 'ring-1 ring-amber-400/50' : ''} ${isPreview ? 'opacity-60 pointer-events-none' : ''} ${block.completed && !isBeingDragged ? 'opacity-40' : ''} ${isBeingDragged ? 'shadow-xl z-10 scale-[1.02]' : 'transition-all active:scale-[0.98]'}`}
-                  style={{ top: `${top}px`, height: `${height}px`, minHeight: '20px', left: leftVal, right: rightVal, touchAction: 'none', cursor: isBeingDragged ? 'grabbing' : 'grab' }}
+                  style={{ top: `${top}px`, height: `${height}px`, minHeight: '20px', left: leftVal, right: rightVal, touchAction: isBeingDragged ? 'none' : 'pan-y', cursor: isBeingDragged ? 'grabbing' : 'grab' }}
                 >
                   <div className="flex items-start gap-1.5 h-full overflow-hidden">
                     <div className={`w-1.5 h-1.5 rounded-full shrink-0 mt-1 ${style.dot}`} />
@@ -630,34 +691,32 @@ export default function TodayClient({
                       <div
                         onPointerDown={e => e.stopPropagation()}
                         onClick={e => { e.stopPropagation(); setPomodoroBlock(block) }}
-                        className="shrink-0 w-5 h-5 rounded-full flex items-center justify-center mt-0.5 mr-0.5"
-                        style={{
-                          backgroundColor: 'rgba(139,92,246,0.25)',
-                          border: '1px solid rgba(139,92,246,0.45)',
-                        }}
+                        className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center -mr-1 bg-violet-500/20 border border-violet-500/40 hover:bg-violet-500/30 transition-colors"
                         title="Iniciar foco"
                       >
-                        <svg className="w-2.5 h-2.5 ml-px" fill="#A78BFA" viewBox="0 0 24 24">
+                        <svg className="w-3 h-3 ml-px" fill="#A78BFA" viewBox="0 0 24 24">
                           <path d="M8 5v14l11-7z" />
                         </svg>
                       </div>
                     )}
 
-                    {/* Completion dot */}
+                    {/* Completion dot — outer 32px hit area, inner 16px visual */}
                     {!isPreview && (
                       <div
                         onClick={e => { e.stopPropagation(); toggleBlock(block.id, !block.completed) }}
-                        className={`shrink-0 w-4 h-4 rounded-full border flex items-center justify-center mt-0.5 ${
+                        className="shrink-0 w-8 h-8 flex items-center justify-center -mr-1.5 cursor-pointer"
+                      >
+                        <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${
                           block.completed
                             ? 'border-green-400 bg-green-400/20'
-                            : `border-current opacity-50`
-                        }`}
-                      >
-                        {block.completed && (
-                          <svg className="w-2.5 h-2.5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                          </svg>
-                        )}
+                            : 'border-current opacity-50'
+                        }`}>
+                          {block.completed && (
+                            <svg className="w-2.5 h-2.5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                            </svg>
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -686,14 +745,15 @@ export default function TodayClient({
               const days  = differenceInDays(parseISO(event.date), startOfDay(new Date()))
               const color = getColor(days)
               const isLast = i === arr.length - 1
+              const isImportantToday = days === 0 && IMPORTANT_EVENT_TYPES.includes(event.type)
               return (
                 <div
                   key={event.id}
                   onClick={() => setEditingEvent(event)}
-                  className={`flex items-center gap-3 px-4 py-3 cursor-pointer active:bg-surface transition-colors ${!isLast ? 'border-b border-border-subtle' : ''}`}
+                  className={`flex items-center gap-3 px-4 py-3 cursor-pointer active:bg-surface transition-colors ${!isLast ? 'border-b border-border-subtle' : ''} ${isImportantToday ? 'bg-amber-500/[0.12] border-l-2 border-l-amber-500/60' : ''}`}
                 >
                   <div className="flex flex-col items-center self-stretch py-0.5 shrink-0">
-                    <div className={`w-2 h-2 rounded-full shrink-0 ${color === 'red' ? 'bg-red-500' : color === 'amber' ? 'bg-amber-400' : 'bg-green-500'}`} />
+                    <div className={`w-2 h-2 rounded-full shrink-0 ${isImportantToday ? 'bg-amber-400 ring-2 ring-amber-400/40' : color === 'red' ? 'bg-red-500' : color === 'amber' ? 'bg-amber-400' : 'bg-green-500'}`} />
                     {!isLast && <div className="w-px flex-1 bg-border-subtle mt-1" />}
                   </div>
                   <div className="flex-1 min-w-0">
@@ -713,9 +773,13 @@ export default function TodayClient({
                       })()}
                     </div>
                   </div>
-                  <Badge variant={color === 'red' ? 'danger' : color === 'amber' ? 'warning' : 'success'}>
-                    {days === 0 ? 'Hoy' : days === 1 ? 'Mañana' : `${days}d`}
-                  </Badge>
+                  {isImportantToday ? (
+                    <Badge variant="exam-today">HOY</Badge>
+                  ) : (
+                    <Badge variant={color === 'red' ? 'danger' : color === 'amber' ? 'warning' : 'success'}>
+                      {days === 0 ? 'Hoy' : days === 1 ? 'Mañana' : `${days}d`}
+                    </Badge>
+                  )}
                 </div>
               )
             })}
@@ -753,7 +817,7 @@ export default function TodayClient({
           <div className="w-full max-w-lg bg-surface border border-border-subtle rounded-3xl shadow-2xl max-h-[90dvh] flex flex-col">
             <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-border-subtle shrink-0">
               <h3 className="text-base font-semibold text-text-primary">Editar bloque</h3>
-              <button onClick={() => setEditingBlock(null)} className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary">
+              <button onClick={() => setEditingBlock(null)} className="w-11 h-11 flex items-center justify-center rounded-full bg-surface-2 text-text-secondary hover:text-text-primary transition-colors">
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                 </svg>

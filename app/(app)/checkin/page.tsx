@@ -67,6 +67,8 @@ export default function CheckInPage() {
   const router = useRouter()
   const supabase = createClient()
   const [step, setStep] = useState(0)
+  const [stepDirection, setStepDirection] = useState<'forward' | 'back'>('forward')
+  const [animKey, setAnimKey] = useState(0)
   const [loading, setLoading] = useState(false)
   const [loadingMsg, setLoadingMsg] = useState('')
   const [alreadyDone, setAlreadyDone] = useState(false)
@@ -338,7 +340,7 @@ export default function CheckInPage() {
   }
 
   return (
-    <div className="min-h-dvh flex flex-col px-4 pt-6 pb-28 max-w-lg mx-auto">
+    <div className="min-h-dvh flex flex-col px-4 pt-6 pb-28 max-w-lg mx-auto md:max-w-xl md:px-6">
       {/* Header */}
       <div className="mb-5">
         <span className="inline-flex items-center px-3 py-1 rounded-full bg-surface-2 border border-border-subtle text-xs text-text-secondary capitalize">
@@ -389,7 +391,10 @@ export default function CheckInPage() {
         ))}
       </div>
 
-      <div className="flex-1 space-y-5">
+      <div
+        key={animKey}
+        className={`flex-1 space-y-5 ${stepDirection === 'forward' ? 'animate-slide-from-right' : 'animate-slide-from-left'}`}
+      >
 
         {/* STEP 0: Estado */}
         {step === 0 && (
@@ -806,7 +811,11 @@ export default function CheckInPage() {
       {step < STEPS.length - 1 ? (
         <div className="flex gap-3 mt-6">
           {step > 0 && (
-            <Button variant="secondary" size="lg" className="flex-1" onClick={() => setStep(s => s - 1)}>
+            <Button variant="secondary" size="lg" className="flex-1" onClick={() => {
+              setStepDirection('back')
+              setAnimKey(k => k + 1)
+              setStep(s => s - 1)
+            }}>
               ← Atrás
             </Button>
           )}
@@ -814,7 +823,11 @@ export default function CheckInPage() {
             variant="primary"
             size="lg"
             className="flex-1"
-            onClick={() => setStep(s => s + 1)}
+            onClick={() => {
+              setStepDirection('forward')
+              setAnimKey(k => k + 1)
+              setStep(s => s + 1)
+            }}
             disabled={!canProceed()}
           >
             Siguiente →
@@ -831,7 +844,11 @@ export default function CheckInPage() {
           >
             {loading ? loadingMsg || 'Guardando...' : 'Guardar y generar plan ✨'}
           </Button>
-          <Button variant="secondary" size="md" className="w-full" onClick={() => setStep(s => s - 1)}>
+          <Button variant="secondary" size="md" className="w-full" onClick={() => {
+            setStepDirection('back')
+            setAnimKey(k => k + 1)
+            setStep(s => s - 1)
+          }}>
             ← Atrás
           </Button>
         </div>

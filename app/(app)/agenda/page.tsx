@@ -38,7 +38,7 @@ export default async function AgendaPage() {
   ])
 
   return (
-    <div className="px-4 pt-4 pb-24 max-w-lg mx-auto">
+    <div className="px-4 pt-4 pb-24 max-w-lg mx-auto md:max-w-2xl md:px-6">
       <AgendaClient events={events || []} today={today} subjects={subjects || []} />
     </div>
   )

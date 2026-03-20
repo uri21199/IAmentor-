@@ -88,7 +88,7 @@ export default function StatsClient({
   }
 
   return (
-    <div className="px-4 pt-4 pb-28 space-y-5 max-w-lg mx-auto">
+    <div className="px-4 pt-4 pb-28 space-y-5 max-w-lg mx-auto md:max-w-3xl md:px-6 lg:max-w-4xl">
       {/* Period badge */}
       <div className="flex items-center gap-2">
         <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-surface-2 border border-border-subtle text-xs text-text-secondary">
@@ -98,7 +98,7 @@ export default function StatsClient({
       </div>
 
       {/* Key metrics */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Card variant="elevated" className="text-center p-4">
           <p className="text-3xl font-bold text-primary">{avgEnergy}</p>
           <p className="text-xs text-text-secondary mt-1">Energía promedio</p>
@@ -196,7 +196,7 @@ export default function StatsClient({
       {subjectProgress.length > 0 && (
         <div>
           <h2 className="text-sm font-semibold text-text-primary mb-3">Progreso académico 📚</h2>
-          <div className="space-y-3">
+          <div className="space-y-3 md:grid md:grid-cols-2 md:space-y-0 md:gap-3 lg:grid-cols-3">
             {subjectProgress.map((s: any) => (
               <Card key={s.id} variant="elevated">
                 <div className="flex items-center gap-2 mb-2">

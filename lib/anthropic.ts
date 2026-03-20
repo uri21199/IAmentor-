@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type {
   PlanGenerationContext,
+  RecentClassLog,
   TimeBlock,
   MicroReview,
 } from '@/types'
@@ -14,12 +15,38 @@ export const anthropic = new Anthropic({
 
 // ── Internal: build the planning prompt ──────────────────────────────────────
 
+function buildRecentClassLogsSection(logs: RecentClassLog[]): string {
+  if (logs.length === 0) return '  (sin clases registradas en los últimos 14 días)'
+
+  return logs
+    .map(log => {
+      const daysLabel = log.days_ago === 0 ? 'hoy' : log.days_ago === 1 ? 'hace 1 día' : `hace ${log.days_ago} días`
+      const topicsStr = log.topics.length > 0
+        ? log.topics.map(t => t.name).join(', ')
+        : 'sin temas registrados'
+      const understandingLabel =
+        log.understanding_level <= 2 ? '🔴 bajo' :
+        log.understanding_level === 3 ? '🟡 medio' : '🟢 bueno'
+      return `  - ${log.subject_name} (${daysLabel}): ${topicsStr} | comprensión ${understandingLabel} (${log.understanding_level}/5)`
+    })
+    .join('\n')
+}
+
 function buildPlanPrompt(
   context: PlanGenerationContext,
   outputFormat: 'array' | 'ndjson',
   travelBlockIds?: string[],
 ): string {
-  const { checkin, calendar_events, study_priorities, energy_history, fixed_blocks } = context
+  const {
+    checkin,
+    calendar_events,
+    study_priorities,
+    energy_history,
+    fixed_blocks,
+    recent_class_logs,
+    today_academic_event,
+    suppress_study_blocks,
+  } = context
   const currentTime = getCurrentTimeArg()
 
   const travelSegments = checkin.travel_route_json
@@ -107,7 +134,22 @@ ${travelSegments || '  (sin viajes)'}
 ## EVENTOS DE GOOGLE CALENDAR
 ${calendarStr}
 
-## PRIORIDADES DE ESTUDIO (ordenadas por urgencia)
+## EVENTO ACADÉMICO IMPORTANTE HOY
+${today_academic_event
+  ? `🔴 ${today_academic_event.title} — tipo: ${today_academic_event.type}`
+  : '  (ninguno)'}
+${suppress_study_blocks
+  ? `⚠️ REGLA ESPECIAL: El usuario tiene un evento académico HOY y NO hay otros eventos críticos mañana ni pasado mañana. NO generes bloques de estudio adicionales. La energía cognitiva está concentrada en el evento presente. Solo agendá descansos, comidas y actividades ligeras (gym, libre). Esta regla tiene PRIORIDAD MÁXIMA sobre cualquier sugerencia de estudio.`
+  : today_academic_event
+    ? `ℹ️ El usuario tiene un evento hoy Y tiene eventos importantes próximos — podés incluir bloques de estudio cortos orientados a esos eventos futuros.`
+    : ''}
+
+## CLASES RECIENTES (últimas 2 semanas)
+${buildRecentClassLogsSection(recent_class_logs ?? [])}
+→ Priorizá el repaso de los temas con comprensión baja (🔴) al armar bloques de estudio.
+→ Temas vistos hace pocos días con comprensión baja son los más urgentes de repasar.
+
+## PRIORIDADES DE ESTUDIO (ordenadas por urgencia — temas débiles ya ponderados por recencia de clase)
 ${academicPriorities || '  (sin materias cargadas)'}
 
 ## HISTORIAL DE ENERGÍA (últimos 7 días)
@@ -246,7 +288,8 @@ function tryParseJsonLine(line: string): TimeBlock | TravelMicroReviewEvent | nu
 export async function replanDay(
   currentPlan: TimeBlock[],
   change: string,
-  context: { energy_level: number; stress_level: string; unexpected_events?: string | null }
+  context: { energy_level: number; stress_level: string; unexpected_events?: string | null },
+  fixedBlocks: TimeBlock[] = [],
 ): Promise<TimeBlock[]> {
   // Argentina timezone: Vercel runs UTC, Argentina = UTC-3
   const now = getCurrentTimeArg()
@@ -261,6 +304,15 @@ export async function replanDay(
     .filter(b => b.manually_edited && !b.deleted)
     .map(b => `  - ${b.start_time}–${b.end_time}: ${b.title}`)
     .join('\n') || '  (ninguno)'
+
+  // Build a description of today's structural fixed blocks so Claude
+  // never generates conflicting or overlapping blocks during replan
+  const fixedBlocksStr = fixedBlocks.length > 0
+    ? fixedBlocks
+        .sort((a, b) => a.start_time.localeCompare(b.start_time))
+        .map(b => `  - ${b.start_time}–${b.end_time}: ${b.title} (${b.type})`)
+        .join('\n')
+    : '  (ninguno)'
 
   const prompt = `Eres un mentor de productividad. El usuario necesita reorganizar su plan del día.
 
@@ -277,17 +329,22 @@ ${change}
 - Estrés: ${context.stress_level}
 ${unexpectedContext}
 
+## BLOQUES FIJOS DEL DÍA (NO modificar, NO eliminar, NO mover bajo ninguna circunstancia)
+Estos bloques representan compromisos reales del usuario hoy (trabajo, clases, viajes).
+Cualquier reorganización debe respetar estos horarios como restricciones absolutas:
+${fixedBlocksStr}
+
 ## BLOQUES EDITADOS MANUALMENTE (NO modificar bajo ninguna circunstancia)
-Los siguientes bloques fueron editados manualmente por el usuario y NO deben modificarse ni reemplazarse:
+Los siguientes bloques fueron editados manualmente por el usuario:
 ${lockedBlocks}
 
 ## INSTRUCCIONES
 1. Mantené los bloques ya completados (completed: true) sin cambios
-2. Mantené los bloques con manually_edited: true EXACTAMENTE como están (título, descripción, horario)
-3. Solo reorganizá los bloques pendientes a partir de ${now}
-4. El "CAMBIO REPORTADO" es lo más importante: ajustá el plan para accommodarlo, incluso si implica reducir la intensidad o eliminar bloques
-5. Si el cambio indica cansancio/estrés/imprevistos, reducí la intensidad de los bloques restantes
-6. Respetá los imprevistos del día ya registrados al inicio (si los hay) al generar los bloques
+2. Mantené los bloques FIJOS y los bloques con manually_edited: true EXACTAMENTE como están
+3. NO generes bloques que se superpongan con los bloques fijos
+4. Solo reorganizá los bloques pendientes a partir de ${now}
+5. El "CAMBIO REPORTADO" es lo más importante: ajustá el plan para accommodarlo
+6. Si el cambio indica cansancio/estrés/imprevistos, reducí la intensidad de los bloques restantes
 7. Respondé ÚNICAMENTE con el JSON array completo (incluyendo bloques ya completados, editados manualmente, y eliminados — todos deben aparecer)
 8. No uses markdown ni explicaciones`
 

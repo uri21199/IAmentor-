@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient } from '@/lib/supabase-server'
 import { replanDay } from '@/lib/anthropic'
-import { format } from 'date-fns'
+import { buildFixedBlocks } from '@/lib/fixed-blocks'
+import { getTodayArg, getDowArg } from '@/lib/utils'
+import type { TimeBlock } from '@/types'
 
 export async function POST(req: NextRequest) {
   try {
@@ -17,9 +19,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'change is required' }, { status: 400 })
     }
 
-    const today = format(new Date(), 'yyyy-MM-dd')
+    const today = getTodayArg()
+    const todayDow = getDowArg()
 
-    // Get current plan
+    // ── Load current plan ──────────────────────────────────
     const { data: plan } = await supabase
       .from('daily_plans')
       .select('plan_json')
@@ -31,25 +34,73 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No plan found for today' }, { status: 400 })
     }
 
-    // Get check-in for context
+    // ── Load full check-in (all fields needed for fixed blocks) ──
     const { data: checkin } = await supabase
       .from('checkins')
-      .select('energy_level, stress_level, unexpected_events')
+      .select('energy_level, stress_level, unexpected_events, work_mode, has_faculty, travel_route_json')
       .eq('user_id', user.id)
       .eq('date', today)
       .single()
 
-    const updatedBlocks = await replanDay(
-      plan.plan_json,
-      change,
-      {
-        energy_level: checkin?.energy_level || 3,
-        stress_level: checkin?.stress_level || 'low',
-        unexpected_events: checkin?.unexpected_events || null,
-      }
+    const checkinExists = !!checkin
+
+    const effectiveCheckin = checkin ?? {
+      energy_level: 3,
+      stress_level: 'low',
+      work_mode: 'remoto',
+      has_faculty: false,
+      travel_route_json: [],
+      unexpected_events: null,
+    }
+
+    // ── Load user_config, today's class_schedule, and today's academic event ──
+    const ACADEMIC_EVENT_TYPES = ['parcial', 'parcial_intermedio', 'entrega_tp']
+    const [{ data: userConfig }, { data: todayClasses }, { data: todayEvents }] = await Promise.all([
+      supabase.from('user_config').select('*').eq('user_id', user.id).single(),
+      supabase
+        .from('class_schedule')
+        .select('*, subjects(name, color)')
+        .eq('user_id', user.id)
+        .eq('day_of_week', todayDow)
+        .eq('is_active', true)
+        .order('start_time'),
+      supabase
+        .from('academic_events')
+        .select('id, type, title, subject_id, notes')
+        .eq('user_id', user.id)
+        .eq('date', today)
+        .in('type', ACADEMIC_EVENT_TYPES),
+    ])
+
+    const todayAcademicEvent = todayEvents?.[0] ?? null
+
+    // ── Rebuild fixed blocks (same logic as plan generation) ──
+    const manuallyEditedBlocks: TimeBlock[] = (plan.plan_json as TimeBlock[])
+      .filter(b => b.manually_edited && !b.deleted)
+
+    const { fixedBlocks } = buildFixedBlocks(
+      todayDow,
+      effectiveCheckin as any,
+      checkinExists,
+      userConfig,
+      todayClasses ?? [],
+      manuallyEditedBlocks,
+      todayAcademicEvent,
     )
 
-    // Save updated plan
+    // ── Run replan with full context ───────────────────────
+    const updatedBlocks = await replanDay(
+      plan.plan_json as TimeBlock[],
+      change,
+      {
+        energy_level: effectiveCheckin.energy_level ?? 3,
+        stress_level: effectiveCheckin.stress_level ?? 'low',
+        unexpected_events: effectiveCheckin.unexpected_events ?? null,
+      },
+      fixedBlocks,
+    )
+
+    // ── Persist updated plan ───────────────────────────────
     await supabase
       .from('daily_plans')
       .update({ plan_json: updatedBlocks })
