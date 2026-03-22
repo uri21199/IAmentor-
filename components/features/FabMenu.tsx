@@ -6,6 +6,9 @@ import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase'
 import Button from '@/components/ui/Button'
 import { getTodayArg } from '@/lib/utils'
+import { EVENT_TYPE_LABELS } from '@/lib/constants'
+import PomodoroFocus from '@/components/features/PomodoroFocus'
+import type { TopicComprehension } from '@/types'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface TopicOption { id: string; name: string; status: string }
@@ -17,15 +20,23 @@ interface Props {
   userId: string
 }
 
-type Modal = 'none' | 'menu' | 'imprevisto' | 'postclase' | 'evento'
+type Modal = 'none' | 'menu' | 'imprevisto' | 'postclase' | 'evento' | 'estudio'
+
+interface FreeStudySession {
+  subjectId:    string
+  subjectName:  string
+  subjectColor: string
+  topicId:      string
+  topicName:    string
+}
 
 const EVENT_TYPES = [
-  { value: 'parcial',            label: 'Parcial' },
-  { value: 'parcial_intermedio', label: 'Parcial intermedio' },
-  { value: 'entrega_tp',         label: 'Entrega TP' },
-  { value: 'medico',             label: 'Turno médico' },
-  { value: 'personal',           label: 'Evento personal' },
-] as const
+  { value: 'parcial'            as const, label: EVENT_TYPE_LABELS.parcial },
+  { value: 'parcial_intermedio' as const, label: EVENT_TYPE_LABELS.parcial_intermedio },
+  { value: 'entrega_tp'         as const, label: EVENT_TYPE_LABELS.entrega_tp },
+  { value: 'medico'             as const, label: EVENT_TYPE_LABELS.medico },
+  { value: 'personal'           as const, label: EVENT_TYPE_LABELS.personal },
+]
 
 // ── Helper: encode extra fields in notes JSON ─────────────────────────────────
 function encodeNotes(extra: Record<string, unknown>): string {
@@ -38,24 +49,29 @@ function ImprevistoModal({ onClose }: { onClose: () => void }) {
   const [text, setText] = useState('')
   const [loading, setLoading] = useState(false)
   const [success, setSuccess] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   async function handle() {
     if (!text.trim()) return
     setLoading(true)
+    setError(null)
     try {
       const res = await fetch('/api/ai/replan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ change: text }),
       })
-      if (!res.ok) throw new Error()
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data?.error ?? `Error ${res.status}`)
+      }
       setSuccess(true)
       setTimeout(() => {
         onClose()
         router.refresh()
       }, 1500)
-    } catch {
-      // silent
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'No se pudo actualizar el plan. Intentá de nuevo.')
     } finally {
       setLoading(false)
     }
@@ -83,7 +99,12 @@ function ImprevistoModal({ onClose }: { onClose: () => void }) {
       </div>
       {success && (
         <div className="mb-3 p-3 rounded-2xl bg-green-500/10 border border-green-500/20">
-          <p className="text-sm text-green-400 text-center">✅ Plan actualizado</p>
+          <p className="text-sm text-green-400 text-center">Plan actualizado</p>
+        </div>
+      )}
+      {error && (
+        <div className="mb-3 p-3 rounded-2xl bg-red-500/10 border border-red-500/20">
+          <p className="text-sm text-red-400 text-center">{error}</p>
         </div>
       )}
       <Button
@@ -434,16 +455,16 @@ function PostClaseModal({ subjectsData, userId, onClose }: { subjectsData: Subje
             </button>
             {hasHomework && (
               <>
-                <div className="border-t border-border-subtle flex items-center gap-3 px-4 py-3">
-                  <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <div className="border-t border-border-subtle flex items-start gap-3 px-4 py-3">
+                  <svg className="w-4 h-4 text-text-secondary shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                   </svg>
-                  <input
-                    type="text"
+                  <textarea
                     value={homeworkDesc}
                     onChange={e => setHomeworkDesc(e.target.value)}
-                    placeholder="Descripción de la tarea"
-                    className="flex-1 bg-transparent text-sm text-text-primary placeholder-text-secondary focus:outline-none"
+                    placeholder="Describí la tarea..."
+                    rows={2}
+                    className="flex-1 bg-transparent text-sm text-text-primary placeholder-text-secondary resize-none focus:outline-none"
                   />
                 </div>
                 {subjectId && subjectEvents.length > 0 && (
@@ -609,64 +630,99 @@ function EventoModal({ subjectsData, userId, onClose }: { subjectsData: SubjectO
           <p className="text-sm text-green-400 font-medium">Evento guardado</p>
         </div>
       ) : (
-        <div className="space-y-4">
-          {/* Title */}
-          <div className="space-y-1.5">
-            <label className="text-xs text-text-secondary font-medium">Título</label>
-            <input
-              type="text"
-              value={title}
-              onChange={e => setTitle(e.target.value)}
-              placeholder="Ej: Parcial Física"
-              autoFocus
-              className="w-full h-11 px-4 rounded-2xl bg-surface-2 border border-border-subtle
-                         text-text-primary text-sm placeholder-text-secondary
-                         focus:outline-none focus:border-primary/60"
-            />
-          </div>
-
-          {/* Date */}
-          <div className="space-y-1.5">
-            <label className="text-xs text-text-secondary font-medium">Fecha</label>
-            <input
-              type="date"
-              value={date}
-              onChange={e => setDate(e.target.value)}
-              className="w-full h-11 px-4 rounded-2xl bg-surface-2 border border-border-subtle
-                         text-text-primary text-sm focus:outline-none focus:border-primary/60"
-            />
-          </div>
-
-          {/* Type */}
-          <div className="space-y-1.5">
-            <label className="text-xs text-text-secondary font-medium">Tipo</label>
-            <select
-              value={type}
-              onChange={e => { setType(e.target.value); if (!['parcial','parcial_intermedio','entrega_tp'].includes(e.target.value)) { setSubjectId(''); setTopicIds([]); setOpenUnitId(null) } }}
-              className="w-full h-11 px-4 rounded-2xl bg-surface-2 border border-border-subtle
-                         text-text-primary text-sm focus:outline-none focus:border-primary/60 appearance-none"
-            >
-              {EVENT_TYPES.map(et => (
-                <option key={et.value} value={et.value}>{et.label}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Subject (academic only) */}
-          {isAcademic && subjectsData.length > 0 && (
-            <div className="space-y-1.5">
-              <label className="text-xs text-text-secondary font-medium">Materia</label>
+        <div className="space-y-3">
+          {/* Title + Type card */}
+          <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden">
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-border-subtle">
+              <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              </svg>
+              <input
+                type="text"
+                value={title}
+                onChange={e => setTitle(e.target.value)}
+                placeholder="Título del evento"
+                autoFocus
+                className="flex-1 bg-transparent text-sm text-text-primary placeholder-text-secondary focus:outline-none"
+              />
+            </div>
+            <div className="flex items-center gap-3 px-4 py-3">
+              <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+              </svg>
               <select
-                value={subjectId}
-                onChange={e => { const id = e.target.value; setSubjectId(id); setTopicIds([]); setOpenUnitId(null); setLocalUnits(subjectsData.find(s => s.id === id)?.units ?? []); setAddingTopicForUnit(null); setNewTopicName('') }}
-                className="w-full h-11 px-4 rounded-2xl bg-surface-2 border border-border-subtle
-                           text-text-primary text-sm focus:outline-none focus:border-primary/60 appearance-none"
+                value={type}
+                onChange={e => { setType(e.target.value); if (!['parcial','parcial_intermedio','entrega_tp'].includes(e.target.value)) { setSubjectId(''); setTopicIds([]); setOpenUnitId(null) } }}
+                className="flex-1 bg-transparent text-sm text-text-primary focus:outline-none appearance-none"
               >
-                <option value="">Sin materia</option>
-                {subjectsData.map(s => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
+                {EVENT_TYPES.map(et => (
+                  <option key={et.value} value={et.value}>{et.label}</option>
                 ))}
               </select>
+            </div>
+          </div>
+
+          {/* Date + Time + Aula card */}
+          <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden">
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-border-subtle">
+              <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <rect x="3" y="4" width="18" height="18" rx="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
+              </svg>
+              <span className="text-sm text-text-secondary w-12 shrink-0">Fecha</span>
+              <input
+                type="date"
+                value={date}
+                onChange={e => setDate(e.target.value)}
+                className="flex-1 bg-transparent text-sm text-text-primary text-right focus:outline-none"
+              />
+            </div>
+            <div className={`flex items-center gap-3 px-4 py-3${isAcademic ? ' border-b border-border-subtle' : ''}`}>
+              <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span className="text-sm text-text-secondary w-12 shrink-0">Hora</span>
+              <input
+                type="time"
+                value={time}
+                onChange={e => setTime(e.target.value)}
+                className="flex-1 bg-transparent text-sm text-text-primary text-right focus:outline-none"
+              />
+            </div>
+            {isAcademic && (
+              <div className="flex items-center gap-3 px-4 py-3">
+                <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                <span className="text-sm text-text-secondary w-12 shrink-0">Aula</span>
+                <input
+                  type="text"
+                  value={aula}
+                  onChange={e => setAula(e.target.value)}
+                  placeholder="Ej: Aula 3"
+                  className="flex-1 bg-transparent text-sm text-text-primary placeholder-text-secondary text-right focus:outline-none"
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Subject card (academic only) */}
+          {isAcademic && subjectsData.length > 0 && (
+            <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden">
+              <div className="flex items-center gap-3 px-4 py-3">
+                <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                </svg>
+                <select
+                  value={subjectId}
+                  onChange={e => { const id = e.target.value; setSubjectId(id); setTopicIds([]); setOpenUnitId(null); setLocalUnits(subjectsData.find(s => s.id === id)?.units ?? []); setAddingTopicForUnit(null); setNewTopicName('') }}
+                  className="flex-1 bg-transparent text-sm text-text-primary focus:outline-none appearance-none"
+                >
+                  <option value="">Sin materia</option>
+                  {subjectsData.map(s => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              </div>
             </div>
           )}
 
@@ -785,34 +841,6 @@ function EventoModal({ subjectsData, userId, onClose }: { subjectsData: SubjectO
             </div>
           )}
 
-          {/* Time + Aula */}
-          <div className="flex gap-3">
-            <div className="flex-1 space-y-1.5">
-              <label className="text-xs text-text-secondary font-medium">Hora (opcional)</label>
-              <input
-                type="time"
-                value={time}
-                onChange={e => setTime(e.target.value)}
-                className="w-full h-11 px-3 rounded-2xl bg-surface-2 border border-border-subtle
-                           text-text-primary text-sm focus:outline-none focus:border-primary/60"
-              />
-            </div>
-            {isAcademic && (
-              <div className="flex-1 space-y-1.5">
-                <label className="text-xs text-text-secondary font-medium">Aula (opcional)</label>
-                <input
-                  type="text"
-                  value={aula}
-                  onChange={e => setAula(e.target.value)}
-                  placeholder="Ej: 204"
-                  className="w-full h-11 px-4 rounded-2xl bg-surface-2 border border-border-subtle
-                             text-text-primary text-sm placeholder-text-secondary
-                             focus:outline-none focus:border-primary/60"
-                />
-              </div>
-            )}
-          </div>
-
           <Button
             variant="primary"
             className="w-full"
@@ -824,6 +852,156 @@ function EventoModal({ subjectsData, userId, onClose }: { subjectsData: SubjectO
           </Button>
         </div>
       )}
+    </ModalShell>
+  )
+}
+
+// ── Estudio libre Modal ───────────────────────────────────────────────────────
+function EstudioModal({
+  subjectsData,
+  onStart,
+  onClose,
+}: {
+  subjectsData: SubjectOption[]
+  onStart: (session: FreeStudySession) => void
+  onClose: () => void
+}) {
+  const [subjectId, setSubjectId]   = useState('')
+  const [expandedUnit, setExpandedUnit] = useState<string | null>(null)
+  const [topicId, setTopicId]       = useState('')
+  const [topicName, setTopicName]   = useState('')
+
+  const subject = subjectsData.find(s => s.id === subjectId)
+
+  function selectSubject(s: SubjectOption) {
+    setSubjectId(s.id)
+    setExpandedUnit(null)
+    setTopicId('')
+    setTopicName('')
+  }
+
+  function toggleUnit(unitId: string) {
+    setExpandedUnit(prev => prev === unitId ? null : unitId)
+  }
+
+  function selectTopic(tid: string, tname: string) {
+    setTopicId(tid)
+    setTopicName(tname)
+  }
+
+  function handleStart() {
+    if (!subject) return
+    onStart({
+      subjectId:    subject.id,
+      subjectName:  subject.name,
+      subjectColor: subject.color,
+      topicId:      topicId || undefined,
+      topicName:    topicName || undefined,
+    })
+  }
+
+  return (
+    <ModalShell title="Estudio libre" onClose={onClose}>
+      <div className="space-y-3">
+
+        {/* Step 1: subject list */}
+        {!subjectId ? (
+          <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden divide-y divide-border-subtle">
+            {subjectsData.map(s => (
+              <button
+                key={s.id}
+                onClick={() => selectSubject(s)}
+                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-surface active:bg-surface transition-colors text-left"
+              >
+                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: s.color }} />
+                <span className="text-sm font-medium text-text-primary flex-1">{s.name}</span>
+                <svg className="w-4 h-4 text-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <>
+            {/* Selected subject header — tap to go back */}
+            <button
+              onClick={() => { setSubjectId(''); setExpandedUnit(null); setTopicId(''); setTopicName('') }}
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl bg-surface-2 border border-border-subtle"
+            >
+              <svg className="w-4 h-4 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+              </svg>
+              <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: subject?.color }} />
+              <span className="text-sm font-semibold text-text-primary flex-1 text-left">{subject?.name}</span>
+            </button>
+
+            {/* Units + topics accordion */}
+            <div className="rounded-2xl bg-surface-2 border border-border-subtle overflow-hidden divide-y divide-border-subtle">
+              {subject?.units.map(unit => (
+                <div key={unit.id}>
+                  {/* Unit row */}
+                  <button
+                    onClick={() => toggleUnit(unit.id)}
+                    className="w-full flex items-center gap-3 px-4 py-3 hover:bg-surface transition-colors text-left"
+                  >
+                    <span className="text-sm font-medium text-text-primary flex-1">{unit.name}</span>
+                    <span className="text-[10px] text-text-secondary mr-1">{unit.topics.length}</span>
+                    <svg
+                      className={`w-4 h-4 text-text-secondary transition-transform ${expandedUnit === unit.id ? 'rotate-180' : ''}`}
+                      fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+
+                  {/* Topic list */}
+                  {expandedUnit === unit.id && (
+                    <div className="border-t border-border-subtle bg-surface divide-y divide-border-subtle/50">
+                      {unit.topics.map(t => {
+                        const isSelected = topicId === t.id
+                        return (
+                          <button
+                            key={t.id}
+                            onClick={() => selectTopic(isSelected ? '' : t.id, isSelected ? '' : t.name)}
+                            className={`w-full flex items-center gap-3 px-5 py-2.5 text-left transition-colors ${isSelected ? 'bg-primary/10' : 'hover:bg-surface-2'}`}
+                          >
+                            <span className={`text-xs ${isSelected ? 'text-primary font-semibold' : 'text-text-secondary'} flex-1`}>
+                              {t.name}
+                            </span>
+                            {isSelected && (
+                              <svg className="w-3.5 h-3.5 text-primary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                              </svg>
+                            )}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {topicId && (
+              <p className="text-xs text-primary/80 px-1">
+                Tema seleccionado: <span className="font-medium">{topicName}</span>
+              </p>
+            )}
+          </>
+        )}
+
+        <p className="text-xs text-text-secondary px-1">
+          Pomodoro de 25 min. Al finalizar, se registra la sesión y podés actualizar el estado del tema.
+        </p>
+        <Button
+          variant="primary"
+          className="w-full"
+          onClick={handleStart}
+          disabled={!subjectId}
+        >
+          Iniciar Pomodoro
+        </Button>
+      </div>
     </ModalShell>
   )
 }
@@ -887,17 +1065,46 @@ const MENU_OPTIONS = [
     ),
     color: 'bg-primary/15 text-primary',
   },
+  {
+    key: 'estudio' as Modal,
+    label: 'Estudio libre',
+    desc: 'Pomodoro sin plan — elegis materia y tema',
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+    ),
+    color: 'bg-violet-500/15 text-violet-400',
+  },
 ]
 
 // ── Main Export ───────────────────────────────────────────────────────────────
 export default function FabMenu({ subjectsData, userId }: Props) {
   const pathname = usePathname()
   const [modal, setModal] = useState<Modal>('none')
+  const [freeStudy, setFreeStudy] = useState<FreeStudySession | null>(null)
 
   // Hide FAB during multi-step check-in flow
   if (pathname === '/checkin') return null
 
   function close() { setModal('none') }
+
+  if (freeStudy) {
+    return (
+      <PomodoroFocus
+        blockId={null}
+        subjectId={freeStudy.subjectId}
+        topicId={freeStudy.topicId}
+        subjectName={freeStudy.subjectName}
+        subjectColor={freeStudy.subjectColor}
+        topicName={freeStudy.topicName}
+        userId={userId}
+        planDate={getTodayArg()}
+        onComplete={(_status: TopicComprehension) => setFreeStudy(null)}
+        onAbandon={() => setFreeStudy(null)}
+      />
+    )
+  }
 
   return (
     <>
@@ -955,6 +1162,13 @@ export default function FabMenu({ subjectsData, userId }: Props) {
       {modal === 'imprevisto' && <ImprevistoModal onClose={close} />}
       {modal === 'postclase' && <PostClaseModal subjectsData={subjectsData} userId={userId} onClose={close} />}
       {modal === 'evento'    && <EventoModal    subjectsData={subjectsData} userId={userId} onClose={close} />}
+      {modal === 'estudio'   && (
+        <EstudioModal
+          subjectsData={subjectsData}
+          onStart={session => { setModal('none'); setFreeStudy(session) }}
+          onClose={close}
+        />
+      )}
     </>
   )
 }

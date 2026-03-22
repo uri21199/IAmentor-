@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase'
 import { Card, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
@@ -105,6 +106,54 @@ export default function SettingsPage() {
             {pushSubscribed ? '🔕 Desactivar notificaciones' : '🔔 Activar notificaciones'}
           </Button>
         )}
+      </Card>
+
+      {/* ── Configuración académica ────────────────────────── */}
+      <Card variant="elevated">
+        <CardHeader>
+          <CardTitle>Configuración académica</CardTitle>
+        </CardHeader>
+        <div className="space-y-1">
+          {[
+            { href: '/cuatrimestres', icon: '🎓', label: 'Cuatrimestres', desc: 'Gestioná tus cuatrimestres y materias' },
+            { href: '/cursada',       icon: '📅', label: 'Cursada',        desc: 'Horario semanal de clases' },
+          ].map(item => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className="flex items-center gap-3 px-3 py-3 rounded-2xl hover:bg-surface-2 transition-colors group"
+            >
+              <span className="text-xl shrink-0">{item.icon}</span>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-text-primary">{item.label}</p>
+                <p className="text-xs text-text-secondary">{item.desc}</p>
+              </div>
+              <svg className="w-4 h-4 text-text-secondary/40 group-hover:text-text-secondary transition-colors shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </Link>
+          ))}
+        </div>
+      </Card>
+
+      {/* ── Configuración laboral ─────────────────────────── */}
+      <Card variant="elevated">
+        <CardHeader>
+          <CardTitle>Trabajo</CardTitle>
+        </CardHeader>
+        <Link
+          href="/trabajo"
+          className="flex items-center gap-3 px-3 py-3 rounded-2xl hover:bg-surface-2 transition-colors group"
+        >
+          <span className="text-xl shrink-0">💼</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-text-primary">Horario laboral</p>
+            <p className="text-xs text-text-secondary">Días, horario y modalidad de trabajo</p>
+          </div>
+          <svg className="w-4 h-4 text-text-secondary/40 group-hover:text-text-secondary transition-colors shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+          </svg>
+        </Link>
       </Card>
 
       {/* App info */}

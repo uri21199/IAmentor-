@@ -49,8 +49,8 @@ const TYPE_LABELS: Record<string, string> = {
 const WEEKDAYS = ['L', 'Ma', 'Mi', 'J', 'V', 'S', 'D']
 
 export default function CalendarClient({ events: initialEvents, today, userId, subjectsData }: Props) {
-  const [viewDate, setViewDate] = useState(new Date(today))
-  const [selectedDate, setSelectedDate] = useState<Date | null>(new Date(today))
+  const [viewDate, setViewDate] = useState(() => parseISO(today))
+  const [selectedDate, setSelectedDate] = useState<Date | null>(() => parseISO(today))
   const [localEvents, setLocalEvents] = useState<CalEvent[]>(initialEvents)
   const [editingEvent, setEditingEvent] = useState<CalEvent | null>(null)
 

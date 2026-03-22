@@ -42,7 +42,7 @@ export interface Topic {
   created_at: string
 }
 
-export type AcademicEventType = 'parcial' | 'parcial_intermedio' | 'entrega_tp' | 'medico' | 'personal'
+export type AcademicEventType = 'parcial' | 'parcial_intermedio' | 'entrega_tp' | 'medico' | 'personal' | 'recuperatorio'
 
 export interface AcademicEvent {
   id: string
@@ -151,6 +151,7 @@ export interface Workout {
   energy_used: number
   completed: boolean
   exercises_json: Exercise[]
+  perceived_effort?: string | null
   created_at: string
 }
 
@@ -161,14 +162,6 @@ export interface StudiedSegment {
   topic_id: string | null
 }
 
-export interface TravelLog {
-  id: string
-  user_id: string
-  date: string
-  segments_json: TravelSegment[]
-  studied_during_json: StudiedSegment[]
-  created_at: string
-}
 
 // ============================================================
 // APP STATE TYPES
@@ -222,6 +215,12 @@ export interface RecentClassLog {
   topics: { id: string; name: string }[]
 }
 
+export interface WeeklyStudyGoal {
+  subject_name: string
+  topics: string[]
+  minutes: number
+}
+
 export interface PlanGenerationContext {
   checkin: CheckIn
   calendar_events: GoogleCalendarEvent[]
@@ -243,6 +242,11 @@ export interface PlanGenerationContext {
    * the user's cognitive energy is focused on today's event.
    */
   suppress_study_blocks: boolean
+  /**
+   * Study commitments the user saved from the weekly planner for today.
+   * Claude uses these as soft targets when generating the day's study blocks.
+   */
+  weekly_study_goals?: WeeklyStudyGoal[]
 }
 
 // ============================================================
@@ -299,25 +303,6 @@ export interface GoogleCalendarEvent {
 // WORKOUT TYPES
 // ============================================================
 
-export interface WorkoutWeek {
-  week_number: number
-  days: WorkoutDay[]
-}
-
-export interface WorkoutDay {
-  day_of_week: number  // 0=Sun, 1=Mon...
-  type: WorkoutType
-  sessions_this_week: number
-}
-
-export interface ExerciseFromAPI {
-  id: number
-  name: string
-  category: string
-  muscles: string[]
-  equipment: string[]
-  description: string
-}
 
 // ============================================================
 // STATS TYPES
@@ -443,6 +428,27 @@ export interface HallucinationChallenge {
   question: string
   options: string[]   // 4 options; correct_index is kept server-side
 }
+
+// ============================================================
+// GRADES TYPES
+// ============================================================
+
+export type GradeType = 'parcial' | 'parcial_intermedio' | 'tp' | 'final' | 'laboratorio'
+
+export interface Grade {
+  id: string
+  user_id: string
+  subject_id: string
+  event_id: string | null
+  title: string
+  grade_type: GradeType
+  score: number | null
+  max_score: number
+  notes: string | null
+  exam_date: string | null
+  created_at: string
+}
+
 
 // ============================================================
 // FEATURE 5: PROGRESS SNAPSHOT TYPES

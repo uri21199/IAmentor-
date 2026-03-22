@@ -1,4 +1,5 @@
 import { createServerSupabaseClient } from '@/lib/supabase-server'
+import { checkRateLimit } from '@/lib/rate-limit'
 import { generateDailyPlanStream } from '@/lib/anthropic'
 import { calculateStudyPriorities, buildClassLogBoosts } from '@/lib/study-priority'
 import { buildFixedBlocks } from '@/lib/fixed-blocks'
@@ -12,6 +13,7 @@ import type {
   AcademicEvent,
   RecentClassLog,
   MicroReview,
+  WeeklyStudyGoal,
 } from '@/types'
 
 /** SSE helper – encodes a single event into a Uint8Array */
@@ -30,18 +32,48 @@ export async function POST() {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
   }
 
+  const rateLimitResponse = await checkRateLimit('plan', user.id)
+  if (rateLimitResponse) return rateLimitResponse
+
   // Use Argentina timezone — Vercel runs UTC, Argentina = UTC-3
   const today = getTodayArg()
   const todayDow = getDowArg() // 0=Sun, 1=Mon, ..., 6=Sat
   const referenceDate = new Date()
 
-  // ── 1. Get today's check-in ─────────────────────────────
-  const { data: checkin } = await supabase
-    .from('checkins')
-    .select('*')
-    .eq('user_id', user.id)
-    .eq('date', today)
-    .single()
+  // ── Phase 1: all independent queries in parallel ────────
+  const sevenDaysAgo    = format(subDays(referenceDate, 7),  'yyyy-MM-dd')
+  const fourteenDaysAgo = format(subDays(referenceDate, 14), 'yyyy-MM-dd')
+
+  const [
+    { data: checkin },
+    { data: semester },
+    { data: energyHistory },
+    { data: rawClassLogs },
+    { data: integration },
+    { data: existingPlan },
+    { data: userConfig },
+    { data: todayClasses },
+    { data: rawWeeklyGoals },
+  ] = await Promise.all([
+    // 1. Today's check-in
+    supabase.from('checkins').select('*').eq('user_id', user.id).eq('date', today).single(),
+    // 2. Active semester
+    supabase.from('semesters').select('id').eq('user_id', user.id).eq('is_active', true).single(),
+    // 3. Energy history (last 7 days)
+    supabase.from('checkins').select('date, energy_level').eq('user_id', user.id).gte('date', sevenDaysAgo).order('date'),
+    // 4. Recent class logs (last 14 days)
+    supabase.from('class_logs').select('subject_id, date, topics_covered_json, understanding_level').eq('user_id', user.id).gte('date', fourteenDaysAgo).order('date', { ascending: false }),
+    // 5. Google Calendar integration record
+    supabase.from('user_integrations').select('*').eq('user_id', user.id).eq('provider', 'google_calendar').single(),
+    // 6. Existing plan (to preserve completed/edited blocks)
+    supabase.from('daily_plans').select('plan_json, completion_percentage').eq('user_id', user.id).eq('date', today).single(),
+    // 7. User config (work schedule, timezone)
+    supabase.from('user_config').select('*').eq('user_id', user.id).single(),
+    // 8. Today's class schedule
+    supabase.from('class_schedule').select('*, subjects(name, color)').eq('user_id', user.id).eq('day_of_week', todayDow).eq('is_active', true).order('start_time'),
+    // 9. Weekly study goals committed for today
+    supabase.from('weekly_study_goals').select('subject_name, topics, minutes').eq('user_id', user.id).eq('plan_date', today),
+  ])
 
   const checkinExists = !!checkin
 
@@ -57,48 +89,58 @@ export async function POST() {
     sleep_quality: 3,
   }
 
-  // ── 2. Get active semester with subjects + topics ────────
-  const { data: semester } = await supabase
-    .from('semesters')
-    .select('id')
-    .eq('user_id', user.id)
-    .eq('is_active', true)
-    .single()
+  // ── Phase 2: semester-dependent + Google Calendar (parallel) ─
+  const thirtyDaysLater = format(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), 'yyyy-MM-dd')
+
+  const [subjectsResult, eventsResult, calendarEvents] = await Promise.all([
+    // Subjects with full unit/topic hierarchy
+    semester
+      ? supabase.from('subjects').select(`
+          id, name, color, semester_id, user_id, created_at,
+          units (
+            id, name, order_index, subject_id, created_at,
+            topics (
+              id, name, full_description, status, last_studied, next_review, created_at, unit_id
+            )
+          )
+        `).eq('semester_id', semester.id)
+      : Promise.resolve({ data: null }),
+    // Academic events for the next 30 days
+    semester
+      ? supabase.from('academic_events').select('*').eq('user_id', user.id).gte('date', today).lte('date', thirtyDaysLater).order('date')
+      : Promise.resolve({ data: null }),
+    // Google Calendar (refresh token if needed)
+    (async (): Promise<any[]> => {
+      if (!integration?.access_token) return []
+      try {
+        let accessToken = integration.access_token
+        if (integration.token_expiry && new Date(integration.token_expiry) < new Date()) {
+          accessToken = await refreshAccessToken(integration.refresh_token)
+          await supabase
+            .from('user_integrations')
+            .update({ access_token: accessToken, token_expiry: new Date(Date.now() + 3600000).toISOString() })
+            .eq('id', integration.id)
+        }
+        return await getTodayEvents(accessToken, integration.refresh_token)
+      } catch (err) {
+        console.error('Calendar fetch error:', err)
+        return []
+      }
+    })(),
+  ])
 
   let subjectsWithDetails: SubjectWithDetails[] = []
   let academicEvents: AcademicEvent[] = []
 
-  if (semester) {
-    const { data: subjects } = await supabase
-      .from('subjects')
-      .select(`
-        id, name, color, semester_id, user_id, created_at,
-        units (
-          id, name, order_index, subject_id, created_at,
-          topics (
-            id, name, full_description, status, last_studied, next_review, created_at, unit_id
-          )
-        )
-      `)
-      .eq('semester_id', semester.id)
-
-    subjectsWithDetails = ((subjects as any[]) || []).map(s => ({
+  if (semester && subjectsResult.data) {
+    subjectsWithDetails = ((subjectsResult.data as any[]) || []).map(s => ({
       ...s,
       upcoming_events: [],
       units: (s.units || [])
         .sort((a: any, b: any) => a.order_index - b.order_index)
         .map((u: any) => ({ ...u, topics: u.topics || [] })),
     }))
-
-    const { data: events } = await supabase
-      .from('academic_events')
-      .select('*')
-      .eq('user_id', user.id)
-      .gte('date', today)
-      .lte('date', format(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), 'yyyy-MM-dd'))
-      .order('date')
-
-    academicEvents = (events || []) as AcademicEvent[]
+    academicEvents = (eventsResult.data || []) as AcademicEvent[]
   }
 
   // ── 3. Today's and near-future important events ─────────
@@ -114,52 +156,10 @@ export async function POST() {
          ACADEMIC_EVENT_TYPES.includes(e.type as any)
   )
 
-  // Suppress study blocks when user has an exam/TP today but nothing critical coming up:
-  // their cognitive energy is concentrated on the present event, not future preparation.
+  // Suppress study blocks when user has an exam/TP today but nothing critical coming up
   const suppressStudyBlocks = todayAcademicEvent !== null && !nextTwoDaysHaveEvent
 
-  // ── 4. Energy history (last 7 days) ─────────────────────
-  const { data: energyHistory } = await supabase
-    .from('checkins')
-    .select('date, energy_level')
-    .eq('user_id', user.id)
-    .gte('date', format(subDays(referenceDate, 7), 'yyyy-MM-dd'))
-    .order('date')
-
-  // ── 5. Google Calendar events ───────────────────────────
-  let calendarEvents: any[] = []
-  const { data: integration } = await supabase
-    .from('user_integrations')
-    .select('*')
-    .eq('user_id', user.id)
-    .eq('provider', 'google_calendar')
-    .single()
-
-  if (integration?.access_token) {
-    try {
-      let accessToken = integration.access_token
-      if (integration.token_expiry && new Date(integration.token_expiry) < new Date()) {
-        accessToken = await refreshAccessToken(integration.refresh_token)
-        await supabase
-          .from('user_integrations')
-          .update({ access_token: accessToken, token_expiry: new Date(Date.now() + 3600000).toISOString() })
-          .eq('id', integration.id)
-      }
-      calendarEvents = await getTodayEvents(accessToken, integration.refresh_token)
-    } catch (err) {
-      console.error('Calendar fetch error:', err)
-    }
-  }
-
-  // ── 6. Recent class logs (last 14 days) ─────────────────
-  const fourteenDaysAgo = format(subDays(referenceDate, 14), 'yyyy-MM-dd')
-  const { data: rawClassLogs } = await supabase
-    .from('class_logs')
-    .select('subject_id, date, topics_covered_json, understanding_level')
-    .eq('user_id', user.id)
-    .gte('date', fourteenDaysAgo)
-    .order('date', { ascending: false })
-
+  // ── Build class log enrichment maps ──────────────────────
   // Build a flat topic-ID → topic-object map across all subjects
   const allTopicsMap = new Map<string, { id: string; name: string }>()
   for (const subject of subjectsWithDetails) {
@@ -186,25 +186,6 @@ export async function POST() {
   }))
 
   const classLogBoosts = buildClassLogBoosts(rawClassLogs ?? [], referenceDate)
-
-  // ── 7. Load existing plan + user config + classes ────────
-  const [{ data: existingPlan }, { data: userConfig }, { data: todayClasses }] =
-    await Promise.all([
-      supabase
-        .from('daily_plans')
-        .select('plan_json, completion_percentage')
-        .eq('user_id', user.id)
-        .eq('date', today)
-        .single(),
-      supabase.from('user_config').select('*').eq('user_id', user.id).single(),
-      supabase
-        .from('class_schedule')
-        .select('*, subjects(name, color)')
-        .eq('user_id', user.id)
-        .eq('day_of_week', todayDow)
-        .eq('is_active', true)
-        .order('start_time'),
-    ])
 
   // ── 8. Preserve completed and manually-edited blocks ────
   const existingPlanBlocks: TimeBlock[] = existingPlan?.plan_json ?? []
@@ -253,6 +234,8 @@ export async function POST() {
     class_log_boosts: classLogBoosts,
   })
 
+  const weeklyStudyGoals: WeeklyStudyGoal[] = (rawWeeklyGoals || []) as WeeklyStudyGoal[]
+
   // ── 11. Build full context ──────────────────────────────
   const context: PlanGenerationContext = {
     checkin: effectiveCheckin as any,
@@ -265,6 +248,7 @@ export async function POST() {
     recent_class_logs: recentClassLogs,
     today_academic_event: todayAcademicEvent,
     suppress_study_blocks: suppressStudyBlocks,
+    weekly_study_goals: weeklyStudyGoals,
   }
 
   // ── 12. Stream SSE response ─────────────────────────────

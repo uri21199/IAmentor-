@@ -7,36 +7,29 @@ import { es } from 'date-fns/locale'
 import { createClient } from '@/lib/supabase'
 import { Badge } from '@/components/ui/Badge'
 import Button from '@/components/ui/Button'
-import { getGreeting, blockTypeColor, blockTypeIcon } from '@/lib/utils'
+import { getGreeting, blockTypeColor, blockTypeIcon, parseEventNotes } from '@/lib/utils'
 import { getDaysColor as getColor } from '@/lib/study-priority'
+import { EVENT_TYPE_LABELS } from '@/lib/constants'
 import PomodoroFocus from '@/components/features/PomodoroFocus'
 import EditEventModal from '@/components/features/EditEventModal'
-import type { CheckIn, DailyPlan, TimeBlock as TimeBlockType, TopicComprehension } from '@/types'
+import TravelFlashcard from '@/components/features/TravelFlashcard'
+import type { CheckIn, DailyPlan, TimeBlock as TimeBlockType, TopicComprehension, AcademicEvent, AcademicEventType } from '@/types'
 
-// ── Event type labels ─────────────────────────────────────────────────────────
-const TYPE_LABELS: Record<string, string> = {
-  parcial:            'Parcial',
-  parcial_intermedio: 'Parcial Int.',
-  entrega_tp:         'Entrega TP',
-  medico:             'Turno médico',
-  personal:           'Personal',
-}
 
-function parseEventNotes(notes: string | null): { topic_ids?: string[] } {
-  if (!notes) return {}
-  try { const p = JSON.parse(notes); return typeof p === 'object' ? p : {} } catch { return {} }
-}
 
 // ── Subject/unit/topic hierarchy for the edit modal ──────────────────────────
 interface TopicOption { id: string; name: string; status: string }
 interface UnitOption  { id: string; name: string; topics: TopicOption[] }
 interface SubjectOption { id: string; name: string; color: string; units: UnitOption[] }
 
+// AcademicEvent with optional joined subjects (from Supabase select with join)
+type AcademicEventWithSubject = AcademicEvent & { subjects?: { name: string } | null }
+
 interface Props {
   user: { id: string; email?: string }
   checkin: CheckIn | null
   plan: DailyPlan | null
-  upcomingEvents: any[]
+  upcomingEvents: AcademicEventWithSubject[]
   energyHistory: { date: string; energy_level: number }[]
   today: string
   previewBlocks?: TimeBlockType[]
@@ -45,7 +38,7 @@ interface Props {
 }
 
 // ── Time grid helpers ─────────────────────────────────────────────────────────
-const GRID_START = 6     // 6:00 AM
+const GRID_START = 5     // 5:00 AM
 const GRID_END   = 24    // midnight
 const HOUR_PX    = 64    // pixels per hour
 
@@ -134,11 +127,16 @@ export default function TodayClient({
 
   const [blocks, setBlocks] = useState<TimeBlockType[]>(plan?.plan_json || [])
   const [generating, setGenerating] = useState(false)
+  const [planError, setPlanError] = useState<string | null>(null)
   const [completion, setCompletion] = useState(plan?.completion_percentage || 0)
   const [upcomingExpanded, setUpcomingExpanded] = useState(false)
   const [now, setNow] = useState<Date | null>(null)
-  const [localUpcoming, setLocalUpcoming] = useState<any[]>(upcomingEvents)
+  const [localUpcoming, setLocalUpcoming] = useState<AcademicEventWithSubject[]>(upcomingEvents)
   const [editingEvent, setEditingEvent] = useState<any | null>(null)
+
+  // ── Event banner state (persisted in localStorage per event+day) ──────────
+  const [bannerDismissed, setBannerDismissed] = useState(false)
+  const [eventCheckedStatus, setEventCheckedStatus] = useState<'si' | 'no' | null>(null)
 
   // ── Drag & drop state ────────────────────────────────────────────────────
   const [draggingBlock, setDraggingBlock] = useState<{
@@ -152,6 +150,12 @@ export default function TodayClient({
 
   // ── Pomodoro state ────────────────────────────────────────────────────────
   const [pomodoroBlock, setPomodoroBlock] = useState<TimeBlockType | null>(null)
+
+  // ── Just-completed animation state (block id → true for 600ms) ──────────
+  const [justCompleted, setJustCompleted] = useState<Set<string>>(new Set())
+
+  // ── Travel flashcard state ────────────────────────────────────────────────
+  const [flashcardBlock, setFlashcardBlock] = useState<TimeBlockType | null>(null)
 
   // ── Block editing state ───────────────────────────────────────────────────
   const [editingBlock, setEditingBlock]     = useState<TimeBlockType | null>(null)
@@ -173,12 +177,56 @@ export default function TodayClient({
     (e: any) => e.date === today && IMPORTANT_EVENT_TYPES.includes(e.type)
   ) ?? null
 
-  // ── Scroll to current time on mount ──────────────────────────────────────
+  // Parse event time from notes (format "HH:MM")
+  const eventNotesParsed = todayImportantEvent ? parseEventNotes(todayImportantEvent.notes) : {}
+  const eventTime = (eventNotesParsed as any).time as string | undefined
+
+  // Is it 3+ hours after the event time? (client-only, needs `now`)
+  const showPostEventCheck = !!(
+    todayImportantEvent &&
+    eventTime &&
+    now &&
+    eventCheckedStatus === null &&
+    !bannerDismissed &&
+    (() => {
+      const [h, m] = eventTime.split(':').map(Number)
+      const threeHoursAfter = new Date()
+      threeHoursAfter.setHours(h + 3, m, 0, 0)
+      return now >= threeHoursAfter
+    })()
+  )
+
+  // ── Load banner/check state from localStorage on mount ───────────────────
+  useEffect(() => {
+    if (!todayImportantEvent) return
+    const dismissedKey = `banner_dismissed_${todayImportantEvent.id}_${today}`
+    const checkedKey   = `event_checked_${todayImportantEvent.id}_${today}`
+    if (localStorage.getItem(dismissedKey) === '1') setBannerDismissed(true)
+    const saved = localStorage.getItem(checkedKey)
+    if (saved === 'si' || saved === 'no') setEventCheckedStatus(saved)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  function handleDismissBanner() {
+    setBannerDismissed(true)
+    if (todayImportantEvent) {
+      localStorage.setItem(`banner_dismissed_${todayImportantEvent.id}_${today}`, '1')
+    }
+  }
+
+  function handleEventCheck(status: 'si' | 'no') {
+    setEventCheckedStatus(status)
+    if (todayImportantEvent) {
+      localStorage.setItem(`event_checked_${todayImportantEvent.id}_${today}`, status)
+    }
+  }
+
+  // ── Scroll to current time on mount (center current time in viewport) ───
   useEffect(() => {
     if (!gridRef.current) return
     const now = new Date()
     const topPx = ((now.getHours() * 60 + now.getMinutes() - GRID_START * 60) * HOUR_PX) / 60
-    gridRef.current.scrollTop = Math.max(0, topPx - 80)
+    gridRef.current.scrollTop = Math.max(0, topPx - gridRef.current.clientHeight / 2)
   }, [])
 
   // ── Client-side clock (avoids UTC mismatch from SSR) ─────────────────────
@@ -228,13 +276,18 @@ export default function TodayClient({
       const map = new Map(accumulated.map(b => [b.id, b]))
       for (const b of incoming) map.set(b.id, b)
       accumulated.length = 0
-      accumulated.push(...map.values())
+      accumulated.push(...Array.from(map.values()))
       const sorted = [...accumulated].sort((a, b) => a.start_time.localeCompare(b.start_time))
       setBlocks(sorted)
     }
 
+    setPlanError(null)
     try {
       const res = await fetch('/api/ai/plan', { method: 'POST', signal })
+      if (res.status === 429) {
+        setPlanError('Límite diario de generaciones alcanzado. Intentá de nuevo mañana.')
+        return
+      }
       if (!res.ok || !res.body) throw new Error('Stream error')
 
       const reader = res.body.getReader()
@@ -252,7 +305,7 @@ export default function TodayClient({
 
         for (const chunk of parts) {
           const eventMatch = chunk.match(/^event: (.+)$/m)
-          const dataMatch  = chunk.match(/^data: (.+)$/ms)
+          const dataMatch  = chunk.match(/^data: ([\s\S]+)$/m)
           if (!dataMatch) continue
           const eventName = eventMatch?.[1] ?? ''
           const payload   = JSON.parse(dataMatch[1])
@@ -272,8 +325,11 @@ export default function TodayClient({
           // 'done' and 'error' events are no-ops in the UI; generation indicator clears via finally
         }
       }
-    } catch (err: any) {
-      if (err.name !== 'AbortError') console.error('Plan stream error:', err)
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name !== 'AbortError') {
+        console.error('Plan stream error:', err)
+        setPlanError('No se pudo generar el plan. Revisá tu conexión e intentá de nuevo.')
+      }
     } finally {
       setGenerating(false)
       // Recalculate completion % from the final accumulated blocks.
@@ -290,9 +346,7 @@ export default function TodayClient({
 
   async function generatePlan() {
     scrollTopRef.current = gridRef.current?.scrollTop ?? 0
-    const prevCompletion = completion
-    setBlocks([])
-    setCompletion(prevCompletion) // keep % visible while new plan streams in
+    // Don't clear blocks before the stream starts — replace progressively as events arrive
     await consumePlanStream()
   }
 
@@ -320,6 +374,10 @@ export default function TodayClient({
   }
 
   async function toggleBlock(id: string, completed: boolean) {
+    if (completed) {
+      setJustCompleted(prev => new Set(prev).add(id))
+      setTimeout(() => setJustCompleted(prev => { const s = new Set(prev); s.delete(id); return s }), 600)
+    }
     const updated = blocks.map(b => b.id === id ? { ...b, completed } : b)
     setBlocks(updated)
     await persistBlocks(updated)
@@ -430,6 +488,17 @@ export default function TodayClient({
     if (newStart !== draggingBlock.curStartMins) {
       setDraggingBlock(prev => prev ? { ...prev, curStartMins: newStart } : null)
     }
+
+    // Auto-scroll grid when dragging near the top or bottom edge
+    if (gridRef.current) {
+      const rect = gridRef.current.getBoundingClientRect()
+      const edgeZone = 64
+      if (e.clientY < rect.top + edgeZone) {
+        gridRef.current.scrollTop -= 6
+      } else if (e.clientY > rect.bottom - edgeZone) {
+        gridRef.current.scrollTop += 6
+      }
+    }
   }
 
   function handleDragEnd() {
@@ -478,7 +547,6 @@ export default function TodayClient({
         <div className="min-w-0">
           <p className="text-base font-bold text-text-primary leading-snug">
             {greeting}
-            <span className="text-xs font-normal text-text-secondary ml-2">{dateLabel}</span>
           </p>
         </div>
 
@@ -509,45 +577,135 @@ export default function TodayClient({
 
 
 
-      {/* ── Important event today banner (compact chip) ──────────────────────── */}
-      {todayImportantEvent && (
-        <div className="mx-4 mb-2 flex items-center gap-2 px-3 py-1.5 rounded-2xl bg-amber-500/10 border border-amber-500/35">
-          <svg className="w-3.5 h-3.5 text-amber-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+      {/* ── Important event today banner ──────────────────────────────────────── */}
+      {todayImportantEvent && !bannerDismissed && eventCheckedStatus !== 'si' && (
+        showPostEventCheck ? (
+          /* 3h+ after event time: ask if it happened */
+          <div className="mx-4 mb-2 rounded-2xl bg-green-500/10 border border-green-500/30 px-3 pt-2.5 pb-3">
+            <div className="flex items-center gap-2 mb-1.5">
+              <svg className="w-3.5 h-3.5 text-green-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <p className="text-xs font-semibold text-green-300 flex-1">
+                ¿Ya realizaste el {EVENT_TYPE_LABELS[todayImportantEvent.type] ?? todayImportantEvent.type}?
+              </p>
+            </div>
+            <p className="text-[11px] text-text-secondary ml-5 mb-2.5 truncate">{todayImportantEvent.title}</p>
+            <div className="flex gap-2 ml-5">
+              <button
+                onClick={() => handleEventCheck('si')}
+                className="flex-1 py-1.5 rounded-xl bg-green-500/20 border border-green-500/30 text-xs font-semibold text-green-300 hover:bg-green-500/30 transition-colors"
+              >
+                Sí, lo hice
+              </button>
+              <button
+                onClick={() => handleEventCheck('no')}
+                className="flex-1 py-1.5 rounded-xl bg-surface-2 border border-border-subtle text-xs font-medium text-text-secondary hover:text-text-primary transition-colors"
+              >
+                No todavía
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* Normal banner */
+          <div className="mx-4 mb-2 flex items-center gap-2 px-3 py-1.5 rounded-2xl bg-amber-500/10 border border-amber-500/35">
+            <svg className="w-3.5 h-3.5 text-amber-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+            </svg>
+            <p className="text-xs font-semibold text-amber-300 shrink-0">
+              {EVENT_TYPE_LABELS[todayImportantEvent.type] ?? todayImportantEvent.type}:
+            </p>
+            <p className="text-xs text-amber-200/80 truncate flex-1" title={todayImportantEvent.title}>
+              {todayImportantEvent.title}
+              {eventTime && <span className="ml-1 opacity-60">· {eventTime}</span>}
+            </p>
+            {!checkin ? (
+              <Link href="/checkin" className="text-xs font-medium text-amber-300 shrink-0 underline underline-offset-2">
+                Check-in
+              </Link>
+            ) : !eventTime ? (
+              /* No time set → allow user to dismiss */
+              <button
+                onClick={handleDismissBanner}
+                className="shrink-0 w-6 h-6 flex items-center justify-center rounded-full text-amber-400/60 hover:text-amber-300 hover:bg-amber-500/20 transition-colors"
+                aria-label="Quitar banner"
+              >
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            ) : (
+              <Badge variant="exam-today">HOY</Badge>
+            )}
+          </div>
+        )
+      )}
+
+      {/* ── Provisional plan banner (plan exists but no check-in) ─────────────── */}
+      {!checkin && blocks.length > 0 && (
+        <div className="mx-4 mb-2 flex items-center gap-2.5 px-3 py-2 rounded-2xl bg-surface-2 border border-border-subtle">
+          <svg className="w-3.5 h-3.5 text-text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
-          <p className="text-xs font-semibold text-amber-300 shrink-0">
-            {TYPE_LABELS[todayImportantEvent.type] ?? todayImportantEvent.type}:
+          <p className="text-xs text-text-secondary flex-1">
+            Plan provisional · <Link href="/checkin" className="text-primary underline underline-offset-2">Hacé el check-in</Link> para personalizarlo
           </p>
-          <p className="text-xs text-amber-200/80 truncate flex-1" title={todayImportantEvent.title}>
-            {todayImportantEvent.title}
-          </p>
-          {!checkin ? (
-            <Link href="/checkin" className="text-xs font-medium text-amber-300 shrink-0 underline underline-offset-2">
-              Check-in
-            </Link>
-          ) : (
-            <Badge variant="exam-today">HOY</Badge>
-          )}
         </div>
       )}
 
       {/* ── Check-in CTA ─────────────────────────────────────────────────────── */}
       {!checkin && !todayImportantEvent && (
-        <div className="mx-4 mb-2 flex items-center gap-3 px-3 py-2.5 rounded-2xl bg-primary/10 border border-primary/25">
-          <div className="w-7 h-7 rounded-lg bg-primary/20 flex items-center justify-center shrink-0">
-            <svg className="w-3.5 h-3.5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
-            </svg>
+        <div className="mx-4 mb-3 rounded-3xl bg-primary/8 border border-primary/20 p-4">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-primary/15 flex items-center justify-center shrink-0">
+              <svg className="w-5 h-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+              </svg>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-text-primary mb-0.5">Completá tu check-in (2 min)</p>
+              <p className="text-xs text-text-secondary leading-relaxed">
+                Contale a la IA tu energía y actividades del día para que genere un plan personalizado para vos.
+              </p>
+            </div>
           </div>
-          <p className="text-xs font-medium text-text-secondary flex-1">Personaliza tu plan con el check-in matutino</p>
-          <Link href="/checkin" className="text-xs font-semibold text-primary shrink-0 px-2.5 py-1.5 rounded-lg bg-primary/15 hover:bg-primary/25 transition-colors">
-            Hacer →
+          <Link
+            href="/checkin"
+            className="mt-3 flex items-center justify-center gap-2 w-full py-2.5 rounded-2xl bg-primary text-white text-sm font-semibold hover:bg-primary/90 transition-colors"
+          >
+            Hacer check-in
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+            </svg>
           </Link>
         </div>
       )}
 
+      {/* ── Plan error state ─────────────────────────────────────────────────── */}
+      {planError && !generating && (
+        <div className="mx-4 mb-3 rounded-3xl bg-red-500/8 border border-red-500/20 p-4">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-2xl bg-red-500/15 flex items-center justify-center shrink-0">
+              <svg className="w-4 h-4 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+              </svg>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-text-primary mb-0.5">Error al generar el plan</p>
+              <p className="text-xs text-text-secondary leading-relaxed">{planError}</p>
+            </div>
+          </div>
+          <button
+            onClick={() => { setPlanError(null); generatePlan() }}
+            className="mt-3 w-full py-2 rounded-2xl bg-surface-2 border border-border-subtle text-xs font-medium text-text-secondary hover:text-text-primary transition-colors"
+          >
+            Reintentar
+          </button>
+        </div>
+      )}
+
       {/* ── Empty plan CTA ───────────────────────────────────────────────────── */}
-      {checkin && blocks.length === 0 && !generating && (
+      {checkin && blocks.length === 0 && !generating && !planError && (
         <div className="mx-4 mb-3 rounded-3xl bg-surface-2 border border-border-subtle p-8 text-center">
           <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto mb-3">
             <svg className="w-6 h-6 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -662,7 +820,7 @@ export default function TodayClient({
                   onPointerCancel={!isPreview ? handleDragEnd : undefined}
                   onClick={() => !isPreview && !dragMovedRef.current && openEdit(block)}
                   className={`absolute rounded-2xl border px-2.5 py-1.5 text-left ${style.bg} ${style.border} ${block.manually_edited ? 'ring-1 ring-amber-400/50' : ''} ${isPreview ? 'opacity-60 pointer-events-none' : ''} ${block.completed && !isBeingDragged ? 'opacity-40' : ''} ${isBeingDragged ? 'shadow-xl z-10 scale-[1.02]' : 'transition-all active:scale-[0.98]'}`}
-                  style={{ top: `${top}px`, height: `${height}px`, minHeight: '20px', left: leftVal, right: rightVal, touchAction: isBeingDragged ? 'none' : 'pan-y', cursor: isBeingDragged ? 'grabbing' : 'grab' }}
+                  style={{ top: `${top}px`, height: `${height}px`, minHeight: '20px', left: leftVal, right: rightVal, touchAction: 'none', cursor: isBeingDragged ? 'grabbing' : 'grab' }}
                 >
                   <div className="flex items-start gap-1.5 h-full overflow-hidden">
                     <div className={`w-1.5 h-1.5 rounded-full shrink-0 mt-1 ${style.dot}`} />
@@ -686,6 +844,20 @@ export default function TodayClient({
                         </p>
                       )}
                     </div>
+                    {/* Flashcard button — travel blocks with micro_review, not completed */}
+                    {!isPreview && block.type === 'travel' && block.micro_review && !block.completed && (
+                      <div
+                        onPointerDown={e => e.stopPropagation()}
+                        onClick={e => { e.stopPropagation(); setFlashcardBlock(block) }}
+                        className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center -mr-1 bg-amber-500/20 border border-amber-500/40 hover:bg-amber-500/30 transition-colors"
+                        title="Repasar con flashcards"
+                      >
+                        <svg className="w-3.5 h-3.5 text-amber-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                        </svg>
+                      </div>
+                    )}
+
                     {/* Focus button — study blocks only, not completed */}
                     {!isPreview && block.type === 'study' && !block.completed && (
                       <div
@@ -703,16 +875,19 @@ export default function TodayClient({
                     {/* Completion dot — outer 32px hit area, inner 16px visual */}
                     {!isPreview && (
                       <div
+                        onPointerDown={e => e.stopPropagation()}
                         onClick={e => { e.stopPropagation(); toggleBlock(block.id, !block.completed) }}
                         className="shrink-0 w-8 h-8 flex items-center justify-center -mr-1.5 cursor-pointer"
                       >
-                        <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${
-                          block.completed
-                            ? 'border-green-400 bg-green-400/20'
-                            : 'border-current opacity-50'
+                        <div className={`w-4 h-4 rounded-full border flex items-center justify-center transition-all duration-200 ${
+                          justCompleted.has(block.id)
+                            ? 'border-green-400 bg-green-400 scale-125'
+                            : block.completed
+                              ? 'border-green-400 bg-green-400/20'
+                              : 'border-current opacity-50'
                         }`}>
-                          {block.completed && (
-                            <svg className="w-2.5 h-2.5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                          {(block.completed || justCompleted.has(block.id)) && (
+                            <svg className={`w-2.5 h-2.5 transition-colors ${justCompleted.has(block.id) ? 'text-white' : 'text-green-400'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                               <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                             </svg>
                           )}
@@ -741,7 +916,7 @@ export default function TodayClient({
           </div>
 
           <div className="rounded-3xl bg-surface-2 border border-border-subtle overflow-hidden">
-            {(upcomingExpanded ? localUpcoming : localUpcoming.slice(0, 3)).map((event: any, i: number, arr: any[]) => {
+            {(upcomingExpanded ? localUpcoming : localUpcoming.slice(0, 3)).map((event, i, arr) => {
               const days  = differenceInDays(parseISO(event.date), startOfDay(new Date()))
               const color = getColor(days)
               const isLast = i === arr.length - 1
@@ -760,7 +935,7 @@ export default function TodayClient({
                     <p className="text-sm font-medium text-text-primary truncate">{event.title}</p>
                     <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                       <span className="text-[10px] text-text-secondary bg-surface px-2 py-0.5 rounded-full border border-border-subtle">
-                        {TYPE_LABELS[event.type] ?? event.type}
+                        {EVENT_TYPE_LABELS[event.type] ?? event.type}
                       </span>
                       {event.subjects?.name && (
                         <span className="text-xs text-text-secondary">{event.subjects.name}</span>
@@ -793,6 +968,15 @@ export default function TodayClient({
             )}
           </div>
         </div>
+      )}
+
+      {/* ── Travel flashcard fullscreen overlay ──────────────────────────────── */}
+      {flashcardBlock?.micro_review && (
+        <TravelFlashcard
+          microReview={flashcardBlock.micro_review}
+          blockTitle={flashcardBlock.title}
+          onClose={() => setFlashcardBlock(null)}
+        />
       )}
 
       {/* ── Pomodoro fullscreen overlay ───────────────────────────────────────── */}
@@ -946,7 +1130,7 @@ export default function TodayClient({
             const newSubj = subjectsData.find(s => s.id === updated.subject_id)
             setLocalUpcoming(prev =>
               prev.map(e => e.id === updated.id
-                ? { ...e, ...updated, subjects: newSubj ? { name: newSubj.name, color: newSubj.color } : e.subjects }
+                ? { ...e, ...updated, type: updated.type as AcademicEventType, subjects: newSubj ? { name: newSubj.name, color: newSubj.color } : e.subjects }
                 : e
               ).sort((a, b) => a.date.localeCompare(b.date))
             )
@@ -956,11 +1140,11 @@ export default function TodayClient({
             setLocalUpcoming(prev => prev.filter(e => e.id !== id))
             setEditingEvent(null)
           }}
-          onDuplicated={ev => {
+          onDuplicated={(ev: { id: string; title: string; date: string; type: string; notes: string | null; subject_id?: string }) => {
             if (ev.date < today) return
             const newSubj = subjectsData.find(s => s.id === ev.subject_id)
             setLocalUpcoming(prev =>
-              [...prev, { ...ev, subjects: newSubj ? { name: newSubj.name, color: newSubj.color } : null }]
+              [...prev, { ...ev, subjects: newSubj ? { name: newSubj.name, color: newSubj.color } : null } as AcademicEventWithSubject]
                 .sort((a, b) => a.date.localeCompare(b.date))
             )
           }}

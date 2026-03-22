@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient } from '@/lib/supabase-server'
 import Anthropic from '@anthropic-ai/sdk'
+import { getTodayArg } from '@/lib/utils'
+import { addDays, parseISO, format } from 'date-fns'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
@@ -31,6 +33,27 @@ export async function POST(req: NextRequest) {
     if (!topic_id || !subject_id || !topic_name) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
     }
+
+    // Count prior completions for SM-2 spaced repetition interval
+    const { count: priorCount } = await supabase
+      .from('topic_completions')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', user.id)
+      .eq('topic_id', topic_id)
+
+    // SM-2 lite: intervals in days per repetition number
+    const SM2_INTERVALS = [1, 3, 7, 14, 30]
+    const rep = Math.min(priorCount ?? 0, SM2_INTERVALS.length - 1)
+    // Calculate next review date in Argentina timezone to avoid UTC drift
+    const todayArg = getTodayArg() // "YYYY-MM-DD" in UTC-3
+    const nextReview = format(addDays(parseISO(todayArg), SM2_INTERVALS[rep]), 'yyyy-MM-dd')
+
+    // Update next_review on the topic (best-effort, non-blocking)
+    supabase
+      .from('topics')
+      .update({ next_review: nextReview })
+      .eq('id', topic_id)
+      .then(() => {})
 
     // Record this completion
     const { data: completion, error: insertErr } = await supabase

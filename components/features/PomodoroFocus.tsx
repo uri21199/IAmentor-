@@ -22,7 +22,7 @@ const BREAK_MSGS = [
 type Phase = 'study' | 'break' | 'rating'
 
 interface Props {
-  blockId:      string
+  blockId?:     string | null
   subjectId?:   string
   topicId?:     string
   subjectName?: string

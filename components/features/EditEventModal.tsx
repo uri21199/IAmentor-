@@ -30,7 +30,7 @@ interface Props {
   onClose: () => void
   onSaved: (updated: EventData) => void
   onDeleted: (id: string) => void
-  onDuplicated?: (event: EventData) => void
+  onDuplicated?: (ev: EventData) => void
 }
 
 const EVENT_TYPES = [
@@ -61,7 +61,7 @@ function buildNotes(extra: { time?: string; aula?: string; topic_ids?: string[] 
   return JSON.stringify(obj)
 }
 
-export default function EditEventModal({ event, subjects, onClose, onSaved, onDeleted, onDuplicated }: Props) {
+export default function EditEventModal({ event, subjects, onClose, onSaved, onDeleted }: Props) {
   const supabase = createClient()
   const extra    = parseNotes(event.notes)
 
@@ -79,8 +79,7 @@ export default function EditEventModal({ event, subjects, onClose, onSaved, onDe
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [confirmClose, setConfirmClose] = useState(false)
-  const [duplicating, setDuplicating] = useState(false)
-  const [localUnits, setLocalUnits] = useState<UnitOption[]>(() =>
+  const[localUnits, setLocalUnits] = useState<UnitOption[]>(() =>
     subjects.find(s => s.id === (event.subject_id || ''))?.units ?? []
   )
   const [addingTopicForUnit, setAddingTopicForUnit] = useState<string | null>(null)
@@ -105,32 +104,6 @@ export default function EditEventModal({ event, subjects, onClose, onSaved, onDe
   function handleClose() {
     if (isDirty) setConfirmClose(true)
     else onClose()
-  }
-
-  async function handleDuplicate() {
-    setDuplicating(true)
-    try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-      const notes = buildNotes({
-        time:      time  || undefined,
-        aula:      aula  || undefined,
-        topic_ids: topicIds.length > 0 ? topicIds : undefined,
-      })
-      const { data, error } = await supabase
-        .from('academic_events')
-        .insert({ user_id: user.id, title: title.trim(), date, type, subject_id: subjectId || null, notes })
-        .select('id')
-        .single()
-      if (error) throw error
-      const newEvent: EventData = { id: data.id, title: title.trim(), date, type, subject_id: subjectId || undefined, notes }
-      onDuplicated?.(newEvent)
-      onClose()
-    } catch (err) {
-      console.error(err)
-    } finally {
-      setDuplicating(false)
-    }
   }
 
   function handleSubjectChange(id: string) {
@@ -493,26 +466,16 @@ export default function EditEventModal({ event, subjects, onClose, onSaved, onDe
             Guardar cambios
           </Button>
 
-          <button
-            type="button"
-            onClick={handleDuplicate}
-            disabled={duplicating || !title.trim() || !date}
-            className="w-full py-2 text-sm text-text-secondary font-medium flex items-center justify-center gap-1.5 disabled:opacity-40"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-            </svg>
-            {duplicating ? 'Duplicando...' : 'Duplicar evento'}
-          </button>
-
           {!confirmDelete ? (
-            <button
-              type="button"
-              onClick={() => setConfirmDelete(true)}
-              className="w-full py-2 text-sm text-red-400 font-medium"
-            >
-              Eliminar evento
-            </button>
+            <div className="flex items-center justify-end px-1">
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(true)}
+                className="text-xs text-red-400 font-medium"
+              >
+                Eliminar evento
+              </button>
+            </div>
           ) : (
             <div className="flex gap-2">
               <button

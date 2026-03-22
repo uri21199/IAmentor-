@@ -3,6 +3,8 @@
 import { useState, useEffect } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { format } from 'date-fns'
+import { es } from 'date-fns/locale'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase'
 import SideDrawer, { NAV_SECTIONS } from './SideDrawer'
@@ -18,6 +20,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/cuatrimestres':  'Cuatrimestres',
   '/settings':       'Configuración',
   '/agenda':         'Agenda',
+  '/weekly':         'Plan semanal',
   '/calendar':       'Calendario',
   '/notifications':  'Notificaciones',
 }
@@ -25,9 +28,10 @@ const PAGE_TITLES: Record<string, string> = {
 interface AppShellProps {
   children: React.ReactNode
   userEmail?: string
+  notificationUnreadCount?: number
 }
 
-export default function AppShell({ children, userEmail }: AppShellProps) {
+export default function AppShell({ children, userEmail, notificationUnreadCount = 0 }: AppShellProps) {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const pathname = usePathname()
   const router = useRouter()
@@ -36,6 +40,13 @@ export default function AppShell({ children, userEmail }: AppShellProps) {
   const title = Object.entries(PAGE_TITLES).find(([k]) =>
     pathname === k || pathname.startsWith(k + '/')
   )?.[1] ?? 'Mentor IA'
+
+  const todaySubtitle = pathname === '/today'
+    ? (() => {
+        const d = format(new Date(), "EEE d 'de' MMM", { locale: es })
+        return d.charAt(0).toUpperCase() + d.slice(1)
+      })()
+    : null
 
   // Scroll lock cuando el drawer está abierto en mobile
   useEffect(() => {
@@ -59,7 +70,7 @@ export default function AppShell({ children, userEmail }: AppShellProps) {
         isOpen={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         userEmail={userEmail}
-        notificationUnreadCount={0}
+        notificationUnreadCount={notificationUnreadCount}
       />
 
       {/* ── Desktop Sidebar (md+) ────────────────────────────────────────── */}
@@ -150,7 +161,12 @@ export default function AppShell({ children, userEmail }: AppShellProps) {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
               </svg>
             </button>
-            <h1 className="flex-1 text-base font-semibold text-text-primary">{title}</h1>
+            <h1 className="flex-1 text-base font-semibold text-text-primary">
+              {title}
+              {todaySubtitle && (
+                <span className="text-xs font-normal text-text-secondary ml-2">{todaySubtitle}</span>
+              )}
+            </h1>
           </div>
         </header>
 

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient } from '@/lib/supabase-server'
+import { checkRateLimit } from '@/lib/rate-limit'
 import { replanDay } from '@/lib/anthropic'
 import { buildFixedBlocks } from '@/lib/fixed-blocks'
 import { getTodayArg, getDowArg } from '@/lib/utils'
@@ -13,6 +14,9 @@ export async function POST(req: NextRequest) {
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    const rateLimitResponse = await checkRateLimit('replan', user.id)
+    if (rateLimitResponse) return rateLimitResponse
 
     const { change } = await req.json()
     if (!change) {

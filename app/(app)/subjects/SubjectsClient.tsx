@@ -235,7 +235,7 @@ export default function SubjectsClient({
   // ── Edit event callbacks ──────────────────────────────────
   function handleEventSaved(updated: { id: string; title: string; date: string; type: string; notes: string | null; subject_id?: string }) {
     setLocalEvents(prev =>
-      prev.map(e => e.id === updated.id ? { ...e, ...updated } : e)
+      prev.map(e => e.id === updated.id ? { ...e, ...updated, type: updated.type as AcademicEventType } : e)
         .sort((a, b) => a.date.localeCompare(b.date))
     )
     setEditingEvent(null)
@@ -771,9 +771,9 @@ export default function SubjectsClient({
           onClose={() => setEditingEvent(null)}
           onSaved={handleEventSaved}
           onDeleted={handleEventDeleted}
-          onDuplicated={ev => {
+          onDuplicated={(ev) => {
             setLocalEvents(prev =>
-              [...prev, ev].sort((a, b) => a.date.localeCompare(b.date))
+              [...prev, ev as AcademicEvent].sort((a, b) => a.date.localeCompare(b.date))
             )
           }}
         />

@@ -46,6 +46,7 @@ function buildPlanPrompt(
     recent_class_logs,
     today_academic_event,
     suppress_study_blocks,
+    weekly_study_goals,
   } = context
   const currentTime = getCurrentTimeArg()
 
@@ -80,6 +81,12 @@ function buildPlanPrompt(
         })
         .join('\n')
     : '  (ninguno)'
+
+  const weeklyGoalsSection = weekly_study_goals && weekly_study_goals.length > 0
+    ? weekly_study_goals
+        .map(g => `  - ${g.subject_name}: ${g.minutes} min${g.topics.length > 0 ? ` (temas: ${g.topics.join(', ')})` : ''}`)
+        .join('\n')
+    : null
 
   const microReviewSection = travelBlockIds && travelBlockIds.length > 0
     ? `
@@ -148,6 +155,11 @@ ${suppress_study_blocks
 ${buildRecentClassLogsSection(recent_class_logs ?? [])}
 → Priorizá el repaso de los temas con comprensión baja (🔴) al armar bloques de estudio.
 → Temas vistos hace pocos días con comprensión baja son los más urgentes de repasar.
+
+## COMPROMISOS DEL PLAN SEMANAL
+${weeklyGoalsSection
+  ? `El usuario se comprometió a estudiar esto hoy (generado desde el planificador semanal):\n${weeklyGoalsSection}\n→ Intentá respetar estos compromisos al asignar los bloques de estudio. Son un objetivo acordado, no una sugerencia.`
+  : '  (sin compromisos semanales para hoy)'}
 
 ## PRIORIDADES DE ESTUDIO (ordenadas por urgencia — temas débiles ya ponderados por recencia de clase)
 ${academicPriorities || '  (sin materias cargadas)'}

@@ -70,11 +70,11 @@ export async function POST(req: NextRequest) {
       .eq('id', completion_id)
       .eq('user_id', user.id)
 
-    // If failed, revert topic to 'yellow' (needs review)
+    // If failed, revert topic to 'yellow' and clear next_review (needs re-study)
     if (!passed) {
       await supabase
         .from('topics')
-        .update({ status: 'yellow', last_studied: new Date().toISOString() })
+        .update({ status: 'yellow', last_studied: new Date().toISOString(), next_review: null })
         .eq('id', topic_id)
     }
 

@@ -34,7 +34,10 @@ export async function middleware(request: NextRequest) {
     request.nextUrl.pathname.startsWith('/cursada') ||
     request.nextUrl.pathname.startsWith('/cuatrimestres') ||
     request.nextUrl.pathname.startsWith('/agenda') ||
-    request.nextUrl.pathname.startsWith('/calendar')
+    request.nextUrl.pathname.startsWith('/calendar') ||
+    request.nextUrl.pathname.startsWith('/weekly') ||
+    request.nextUrl.pathname.startsWith('/notifications') ||
+    request.nextUrl.pathname.startsWith('/grades')
 
   if (isAppRoute && !user) {
     const url = request.nextUrl.clone()

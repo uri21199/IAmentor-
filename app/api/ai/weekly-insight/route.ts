@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient } from '@/lib/supabase-server'
+import { checkRateLimit } from '@/lib/rate-limit'
 import { generateWeeklyInsight } from '@/lib/anthropic'
 
 export async function POST(req: NextRequest) {
@@ -10,6 +11,9 @@ export async function POST(req: NextRequest) {
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    const rateLimitResponse = await checkRateLimit('weekly-insight', user.id)
+    if (rateLimitResponse) return rateLimitResponse
 
     const body = await req.json()
 

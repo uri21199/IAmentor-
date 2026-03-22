@@ -70,6 +70,13 @@ NEXT_PUBLIC_BASE_URL=http://localhost:3000
 
 # ── Secret interno (autenticación de /api/push/send) ─────────
 INTERNAL_SECRET=una_cadena_aleatoria_larga_y_segura
+
+# ── Vercel Cron (pre-generación del plan a las 6AM) ──────────
+CRON_SECRET=otra_cadena_aleatoria_larga_y_segura
+
+# ── Upstash Redis (rate limiting en /api/ai/*) ───────────────
+UPSTASH_REDIS_REST_URL=https://TU-INSTANCIA.upstash.io
+UPSTASH_REDIS_REST_TOKEN=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 ```
 
 ### Dónde conseguir cada variable
@@ -86,6 +93,9 @@ INTERNAL_SECRET=una_cadena_aleatoria_larga_y_segura
 | `VAPID_PRIVATE_KEY` | Idem anterior |
 | `VAPID_MAILTO` | Email de contacto para identificarse ante servidores push (ej: `mailto:admin@mentoria.app`) |
 | `INTERNAL_SECRET` | Cadena aleatoria que elegís vos (mínimo 32 caracteres) |
+| `CRON_SECRET` | Cadena aleatoria para autenticar el Vercel Cron Job |
+| `UPSTASH_REDIS_REST_URL` | [console.upstash.com](https://console.upstash.com) → Create Database → REST API |
+| `UPSTASH_REDIS_REST_TOKEN` | Mismo lugar que la URL |
 
 > **Importante:** `.env.local` está en `.gitignore`. Nunca commitear este archivo.
 
@@ -147,6 +157,8 @@ Ejecutar cada migración en SQL Editor en este orden exacto:
 | `supabase/migrations_v8.sql` | Tabla `pomodoro_sessions` (versión actualizada) |
 | `supabase/migrations_v9.sql` | Smart deadline alerts: columnas `event_id`, `subject_id`, `trigger_days_before`, `title`, `body`, `context_json`, `push_sent`, `target_path` en `notifications` + nuevo UNIQUE constraint |
 | `supabase/migrations_features456.sql` | **Features 4-5-6:** tablas `topic_completions` (detección de alucinación) y `progress_snapshots` (heatmap de dominio) con RLS e índices |
+| `supabase/migration_resources.sql` | Tabla `subject_resources` (recursos/links por materia) con RLS e índices — el backend existe aunque la UI fue eliminada |
+| `supabase/migration_grades.sql` | Tabla `grades` para calificaciones por materia con RLS e índices |
 
 ```sql
 -- Verificar tablas tras todas las migraciones:
@@ -155,9 +167,9 @@ WHERE table_schema = 'public'
 ORDER BY table_name;
 
 -- Debe incluir: academic_events, checkins, class_logs, class_schedule,
---               daily_plans, notifications, pomodoro_sessions, profiles,
---               progress_snapshots, push_subscriptions, semesters, subjects,
---               topic_completions, topics, travel_logs, units,
+--               daily_plans, grades, notifications, pomodoro_sessions, profiles,
+--               progress_snapshots, push_subscriptions, semesters, subject_resources,
+--               subjects, topic_completions, topics, travel_logs, units,
 --               user_config, user_integrations, workouts
 ```
 
@@ -464,7 +476,14 @@ echo "mailto:admin@mentoria.app"       | vercel env add VAPID_MAILTO production
 echo "https://iamentor.vercel.app"     | vercel env add NEXTAUTH_URL production
 echo "https://iamentor.vercel.app"     | vercel env add NEXT_PUBLIC_BASE_URL production
 echo "tu_internal_secret_aqui"         | vercel env add INTERNAL_SECRET production
+echo "tu_cron_secret_aqui"             | vercel env add CRON_SECRET production
+echo "https://TU.upstash.io"          | vercel env add UPSTASH_REDIS_REST_URL production
+echo "tu_upstash_token_aqui"          | vercel env add UPSTASH_REDIS_REST_TOKEN production
 ```
+
+> **Rate limiting (Upstash):** Instalar con `npm install @upstash/ratelimit @upstash/redis`. Si las variables de Upstash no están configuradas, el rate limiting falla gracefully (deja pasar todas las requests).
+
+> **Vercel Cron:** El archivo `vercel.json` ya incluye el schedule `0 9 * * *` (06:00 UTC-3). El Cron Job se activará automáticamente al hacer deploy. Requiere `CRON_SECRET` y `SUPABASE_SERVICE_ROLE_KEY`.
 
 ### 11.4 Deploy a producción
 
@@ -706,13 +725,19 @@ Ambos formatos funcionan — solo asegurarse de copiar la key completa sin espac
 | `supabase/migrations_v8.sql` | `pomodoro_sessions` (versión actualizada) |
 | `supabase/migrations_v9.sql` | Smart deadline alerts en `notifications` |
 | `supabase/migrations_features456.sql` | `topic_completions` + `progress_snapshots` (Features 4, 5, 6) |
+| `supabase/migration_resources.sql` | `subject_resources` — tabla de recursos/links por materia (backend activo, UI eliminada) |
+| `supabase/migration_grades.sql` | `grades` — calificaciones por materia |
+| `vercel.json` | Vercel Cron schedule: `0 9 * * *` para pre-generación del plan a las 06:00 UTC-3 |
 | `lib/anthropic.ts` | Funciones `generateDailyPlan()`, `replanDay()`, `generateWeeklyInsight()` |
 | `lib/study-priority.ts` | Algoritmo puro de priorización (sin DB, testeable) |
+| `lib/fixed-blocks.ts` | `buildFixedBlocks()` — bloques determinísticos reutilizables en plan y replan |
+| `lib/rate-limit.ts` | Helper Upstash ratelimit con fallback graceful si env vars ausentes |
+| `lib/offline-queue.ts` | Cola localStorage para mutaciones offline + sync al reconectar |
 | `lib/notifications-engine.ts` | Motor puro de triggers de notificaciones (sin DB, testeable) |
 | `lib/exercises.ts` | 48 ejercicios + `getWorkoutPlan(type, energy, week, effort, studyMode?)` + `getNextWorkoutType()` |
 | `lib/google-calendar.ts` | OAuth + fetch de eventos + refresh automático de token |
 | `public/push-sw.js` | Service Worker para push notifications |
-| `public/manifest.json` | PWA manifest (name, icons, display, theme_color) |
+| `public/manifest.json` | PWA manifest con shortcuts para Android |
 | `worker/index.js` | Service Worker custom mergeado por next-pwa |
 | `hooks/usePushNotifications.ts` | Hook React para gestionar suscripción push |
 | `lib/push.ts` | Helpers `web-push` para enviar notificaciones desde server |
@@ -786,7 +811,26 @@ Desde cualquier vista (agenda, calendario o pantalla de materia), tocar el event
 
 ---
 
-### 16.3 Verificar que los flujos funcionan correctamente
+### 16.3 Registrar una Calificación
+
+Registrar la nota obtenida en un parcial, recuperatorio o entrega de TP.
+
+1. Ir a **Calificaciones** (menú lateral, bajo "Estudio")
+2. Tocar **"Registrar"** (botón en el header — solo aparece si hay materias activas con fechas cargadas)
+3. **Paso 1 — Elegí la materia:** seleccionar la materia del examen (solo se muestran materias del cuatrimestre activo)
+4. **Paso 2 — Elegí el examen:** se muestran todas las fechas importantes. Las del subject seleccionado aparecen primero; las de otras materias debajo bajo "Otras fechas". Las que ya tienen nota muestran el score.
+5. **Paso 3 — Registrar resultado:**
+   - Ingresar la nota (campo numérico, 0–10, opcional)
+   - Si la nota es **< 4 (desaprobado)**: aparece una sección roja que pregunta la fecha del recuperatorio. Si se completa, el recuperatorio se crea automáticamente en "Fechas importantes" de la materia.
+6. Tocar **"Guardar"**.
+
+> La nota ingresada también aparece en la card del evento dentro de la pantalla de la materia, reemplazando el badge de días restantes.
+
+> Para editar una nota ya registrada: repetir el flujo, seleccionar el mismo evento — el score se pre-carga y al guardar se actualiza (PATCH).
+
+---
+
+### 16.4 Verificar que los flujos funcionan correctamente
 
 Checklist rápido post-setup:
 
@@ -799,6 +843,8 @@ Checklist rápido post-setup:
 □ Fecha importante: el evento aparece en /agenda y en /calendar
 □ Fecha importante: los días restantes aparecen en el badge (rojo < 7 días)
 □ Editar evento desde /agenda: los cambios persisten al navegar a /calendar
+□ Calificaciones: al ingresar nota < 4 aparece la opción de recuperatorio
+□ Calificaciones: la nota registrada se muestra en la card del evento dentro de la materia
 ```
 
-> **Nota sobre materias inactivas o eliminadas:** el FAB solo muestra materias del cuatrimestre activo que no fueron eliminadas (soft-delete). Si una materia no aparece en el selector, verificar que el cuatrimestre correcto está marcado como activo en `/settings/semesters`.
+> **Nota sobre materias inactivas o eliminadas:** el FAB y la página de Calificaciones solo muestran materias del cuatrimestre activo. Si una materia no aparece, verificar que el cuatrimestre correcto está marcado como activo en `/settings/semesters`.

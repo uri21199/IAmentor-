@@ -55,6 +55,7 @@ export default function OnboardingClient() {
     end_date: defaultEndDate,
   })
   const [semesterId, setSemesterId] = useState<string | null>(null)
+  const [semesterDateError, setSemesterDateError] = useState('')
 
   // ── Subjects ─────────────────────────────────────────────
   const [subjects, setSubjects] = useState<{ name: string; color: string }[]>([])
@@ -111,6 +112,11 @@ export default function OnboardingClient() {
 
   async function saveSemesterAndAdvance() {
     if (!semester.name || !semester.start_date || !semester.end_date) return
+    if (semester.start_date >= semester.end_date) {
+      setSemesterDateError('La fecha de inicio debe ser anterior a la fecha de fin')
+      return
+    }
+    setSemesterDateError('')
     setSaving(true)
     try {
       const { data: { user } } = await supabase.auth.getUser()
@@ -136,15 +142,31 @@ export default function OnboardingClient() {
   }
 
   async function saveSubjectsAndAdvance() {
-    if (subjects.length === 0 || !semesterId) return
+    if (subjects.length === 0) return
     setSaving(true)
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
+
+      // If semesterId is null (e.g. page was refreshed mid-onboarding), create the semester first
+      let activeSemesterId = semesterId
+      if (!activeSemesterId) {
+        const { data, error } = await supabase.from('semesters').insert({
+          user_id: user.id,
+          name: semester.name,
+          start_date: semester.start_date,
+          end_date: semester.end_date,
+          is_active: true,
+        }).select('id').single()
+        if (error || !data) return
+        activeSemesterId = data.id
+        setSemesterId(activeSemesterId)
+      }
+
       await supabase.from('subjects').insert(
         subjects.map(s => ({
           user_id: user.id,
-          semester_id: semesterId,
+          semester_id: activeSemesterId,
           name: s.name,
           color: s.color,
         }))
@@ -350,8 +372,8 @@ export default function OnboardingClient() {
                 <input
                   type="date"
                   value={semester.start_date}
-                  onChange={e => setSemester(p => ({ ...p, start_date: e.target.value }))}
-                  className={inputClass}
+                  onChange={e => { setSemester(p => ({ ...p, start_date: e.target.value })); setSemesterDateError('') }}
+                  className={`${inputClass} ${semesterDateError ? 'border-red-500/60' : ''}`}
                 />
               </div>
               <div className="flex-1">
@@ -359,11 +381,14 @@ export default function OnboardingClient() {
                 <input
                   type="date"
                   value={semester.end_date}
-                  onChange={e => setSemester(p => ({ ...p, end_date: e.target.value }))}
-                  className={inputClass}
+                  onChange={e => { setSemester(p => ({ ...p, end_date: e.target.value })); setSemesterDateError('') }}
+                  className={`${inputClass} ${semesterDateError ? 'border-red-500/60' : ''}`}
                 />
               </div>
             </div>
+            {semesterDateError && (
+              <p className="text-xs text-red-400 mt-1">{semesterDateError}</p>
+            )}
           </div>
         </div>
       )}

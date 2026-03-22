@@ -60,6 +60,44 @@
       "purpose": "any maskable"
     }
   ],
+  "shortcuts": [
+    {
+      "name": "Ver plan de hoy",
+      "short_name": "Hoy",
+      "description": "Abre el plan del día generado por IA",
+      "url": "/today",
+      "icons": [
+        { "src": "/icons/icon-96x96.png", "sizes": "96x96", "type": "image/png" }
+      ]
+    },
+    {
+      "name": "Mis materias",
+      "short_name": "Materias",
+      "description": "Ver estado de temas por materia",
+      "url": "/subjects",
+      "icons": [
+        { "src": "/icons/icon-96x96.png", "sizes": "96x96", "type": "image/png" }
+      ]
+    },
+    {
+      "name": "Agenda",
+      "short_name": "Agenda",
+      "description": "Próximos parciales y fechas importantes",
+      "url": "/agenda",
+      "icons": [
+        { "src": "/icons/icon-96x96.png", "sizes": "96x96", "type": "image/png" }
+      ]
+    },
+    {
+      "name": "Hacer check-in",
+      "short_name": "Check-in",
+      "description": "Registrar tu estado del día",
+      "url": "/checkin",
+      "icons": [
+        { "src": "/icons/icon-96x96.png", "sizes": "96x96", "type": "image/png" }
+      ]
+    }
+  ],
   "screenshots": [],
   "prefer_related_applications": false
 }

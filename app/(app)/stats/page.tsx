@@ -8,27 +8,9 @@ export default async function StatsPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const today = format(new Date(), 'yyyy-MM-dd')
   const thirtyDaysAgo = format(subDays(new Date(), 30), 'yyyy-MM-dd')
-  const sevenDaysAgo = format(subDays(new Date(), 7), 'yyyy-MM-dd')
 
-  // Fetch last 30 days of check-ins
-  const { data: checkins } = await supabase
-    .from('checkins')
-    .select('date, sleep_quality, energy_level, stress_level')
-    .eq('user_id', user.id)
-    .gte('date', thirtyDaysAgo)
-    .order('date', { ascending: true })
-
-  // Fetch daily plans for completion
-  const { data: plans } = await supabase
-    .from('daily_plans')
-    .select('date, completion_percentage')
-    .eq('user_id', user.id)
-    .gte('date', thirtyDaysAgo)
-    .order('date', { ascending: true })
-
-  // Fetch workouts
+  // Fetch workouts (last 30 days)
   const { data: workouts } = await supabase
     .from('workouts')
     .select('date, type, completed, duration_minutes')
@@ -36,14 +18,23 @@ export default async function StatsPage() {
     .gte('date', thirtyDaysAgo)
     .order('date', { ascending: true })
 
-  // Travel logs
-  const { data: travelLogs } = await supabase
-    .from('travel_logs')
-    .select('date, segments_json, studied_during_json')
+  // Fetch checkins for energy/completion correlation (last 30 days)
+  const { data: checkins } = await supabase
+    .from('checkins')
+    .select('date, energy_level')
     .eq('user_id', user.id)
     .gte('date', thirtyDaysAgo)
+    .order('date', { ascending: true })
 
-  // Active semester subjects with topic status
+  // Fetch daily plans for completion % correlation
+  const { data: dailyPlans } = await supabase
+    .from('daily_plans')
+    .select('date, completion_percentage')
+    .eq('user_id', user.id)
+    .gte('date', thirtyDaysAgo)
+    .order('date', { ascending: true })
+
+  // Active semester subjects with topic status — exclude soft-deleted subjects
   const { data: semester } = await supabase
     .from('semesters')
     .select('id')
@@ -51,7 +42,7 @@ export default async function StatsPage() {
     .eq('is_active', true)
     .single()
 
-  let subjectProgress: any[] = []
+  let subjectProgress: { id: string; name: string; color: string; total: number; green: number; yellow: number; red: number; mastery: number }[] = []
   if (semester) {
     const { data: subjects } = await supabase
       .from('subjects')
@@ -62,14 +53,15 @@ export default async function StatsPage() {
         )
       `)
       .eq('semester_id', semester.id)
+      .is('deleted_at', null)
       .order('name')
 
-    subjectProgress = (subjects || []).map((s: any) => {
-      const topics = s.units?.flatMap((u: any) => u.topics) || []
+    subjectProgress = (subjects || []).map((s) => {
+      const topics = (s.units as { topics: { status: string }[] }[])?.flatMap(u => u.topics) || []
       const total = topics.length
-      const green = topics.filter((t: any) => t.status === 'green').length
-      const yellow = topics.filter((t: any) => t.status === 'yellow').length
-      const red = topics.filter((t: any) => t.status === 'red').length
+      const green = topics.filter(t => t.status === 'green').length
+      const yellow = topics.filter(t => t.status === 'yellow').length
+      const red = topics.filter(t => t.status === 'red').length
       return {
         id: s.id,
         name: s.name,
@@ -83,59 +75,19 @@ export default async function StatsPage() {
     })
   }
 
-  // ── Feature 5: Upsert today's progress snapshot server-side ──────────────
-  // Fire-and-forget: runs in parallel with the rest of the page data fetches.
-  // The DomainHeatmap component will also trigger this on mount, so this is
-  // just an optimistic pre-fetch to ensure data is fresh on first render.
-  if (semester) {
-    const { data: subjectsForSnapshot } = await supabase
-      .from('subjects')
-      .select(`id, units ( topics ( id, status ) )`)
-      .eq('semester_id', semester.id)
-
-    if (subjectsForSnapshot) {
-      const snapshotRows = subjectsForSnapshot.map((s: any) => {
-        const topics = (s.units ?? []).flatMap((u: any) => u.topics ?? [])
-        const total = topics.length
-        const green = topics.filter((t: any) => t.status === 'green').length
-        return {
-          user_id: user.id,
-          subject_id: s.id,
-          snapshot_date: today,
-          health_score: total > 0 ? parseFloat((green / total).toFixed(4)) : 0,
-          topics_json: topics.map((t: any) => ({ id: t.id, status: t.status })),
-        }
-      })
-      if (snapshotRows.length > 0) {
-        await supabase
-          .from('progress_snapshots')
-          .upsert(snapshotRows, { onConflict: 'user_id,subject_id,snapshot_date' })
-      }
-    }
-  }
-
-  // Calculate travel study ratio
-  const travelRatio = (() => {
-    let totalSegments = 0
-    let studiedSegments = 0
-    for (const log of (travelLogs || [])) {
-      const segments = log.segments_json || []
-      const studied = log.studied_during_json || []
-      totalSegments += segments.length
-      studiedSegments += studied.filter((s: any) => s.studied).length
-    }
-    return totalSegments > 0 ? studiedSegments / totalSegments : 0
-  })()
+  // Build correlation data: join checkins + plans by date
+  const plansByDate = new Map((dailyPlans || []).map(p => [p.date, p.completion_percentage ?? 0]))
+  const correlationData = (checkins || []).map(c => ({
+    date: c.date,
+    energy: c.energy_level,
+    completion: plansByDate.get(c.date) ?? null,
+  })).filter(d => d.completion !== null)
 
   return (
     <StatsClient
-      checkins={checkins || []}
-      plans={plans || []}
       workouts={workouts || []}
       subjectProgress={subjectProgress}
-      travelRatio={travelRatio}
-      today={today}
-      userId={user.id}
+      correlationData={correlationData as { date: string; energy: number; completion: number }[]}
     />
   )
 }

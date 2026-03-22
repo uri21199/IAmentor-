@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { format, parseISO, differenceInDays, isToday, isYesterday, isTomorrow, startOfDay } from 'date-fns'
+import { format, parseISO, differenceInDays, isToday, isYesterday, isTomorrow, startOfDay, startOfWeek, addDays, addWeeks, subWeeks } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { getDaysColor } from '@/lib/study-priority'
 import { Badge } from '@/components/ui/Badge'
@@ -80,6 +80,12 @@ export default function AgendaClient({ events: initialEvents, today, subjects = 
   const [events, setEvents] = useState<Event[]>(initialEvents)
   const [editingEvent, setEditingEvent] = useState<Event | null>(null)
 
+  // ── View mode ─────────────────────────────────────────────
+  const [viewMode, setViewMode] = useState<'list' | 'week'>('list')
+
+  // ── Week navigation ───────────────────────────────────────
+  const [weekOffset, setWeekOffset] = useState(0)
+
   // ── Filters ────────────────────────────────────────────────
   const [filterType, setFilterType] = useState('')
   const [filterSubject, setFilterSubject] = useState('')
@@ -154,24 +160,167 @@ export default function AgendaClient({ events: initialEvents, today, subjects = 
 
   const dates = Object.keys(grouped).sort()
 
+  // ── Week view data ────────────────────────────────────────
+  const allEventsForWeek = [...events, ...pastEvents]
+  const weekStart = startOfWeek(addWeeks(new Date(), weekOffset), { weekStartsOn: 1 }) // Monday
+  const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i))
+  const weekEnd = weekDays[6]
+
+  function getEventsForDay(date: Date): Event[] {
+    const dateStr = format(date, 'yyyy-MM-dd')
+    return allEventsForWeek.filter(e => e.date === dateStr)
+  }
+
   return (
     <>
       {/* ── Header ──────────────────────────────────────────── */}
       <div className="flex items-center justify-between mb-3">
         <h1 className="text-xl font-bold text-text-primary">Agenda</h1>
-        <Link
-          href="/calendar"
-          className="flex items-center gap-1 text-xs text-primary font-medium"
-        >
-          Ver calendario
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-          </svg>
-        </Link>
+        <div className="flex items-center gap-2">
+          {/* View toggle */}
+          <div className="flex bg-surface-2 rounded-xl p-0.5 border border-border-subtle">
+            <button
+              onClick={() => setViewMode('list')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
+                viewMode === 'list' ? 'bg-surface text-text-primary shadow-sm' : 'text-text-secondary'
+              }`}
+            >
+              Lista
+            </button>
+            <button
+              onClick={() => setViewMode('week')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
+                viewMode === 'week' ? 'bg-surface text-text-primary shadow-sm' : 'text-text-secondary'
+              }`}
+            >
+              Semana
+            </button>
+          </div>
+          <Link
+            href="/calendar"
+            className="flex items-center gap-1 text-xs text-primary font-medium"
+          >
+            Calendario
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          </Link>
+        </div>
       </div>
 
-      {/* ── Filters ─────────────────────────────────────────── */}
-      <div className="space-y-2 mb-4">
+      {/* ── Week view ───────────────────────────────────────── */}
+      {viewMode === 'week' && (
+        <div className="mb-4">
+          {/* Week navigation */}
+          <div className="flex items-center justify-between mb-3">
+            <button
+              onClick={() => setWeekOffset(o => o - 1)}
+              className="w-8 h-8 flex items-center justify-center rounded-xl bg-surface-2 text-text-secondary hover:text-text-primary transition-colors"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+              </svg>
+            </button>
+            <div className="text-center">
+              <p className="text-sm font-semibold text-text-primary">
+                {weekOffset === 0 ? 'Esta semana' : weekOffset === 1 ? 'Próxima semana' : weekOffset === -1 ? 'Semana pasada' : `Semana del ${format(weekStart, 'd MMM', { locale: es })}`}
+              </p>
+              <p className="text-xs text-text-secondary">
+                {format(weekStart, 'd MMM', { locale: es })} – {format(weekEnd, 'd MMM', { locale: es })}
+              </p>
+            </div>
+            <button
+              onClick={() => setWeekOffset(o => o + 1)}
+              className="w-8 h-8 flex items-center justify-center rounded-xl bg-surface-2 text-text-secondary hover:text-text-primary transition-colors"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+          </div>
+
+          {/* Days */}
+          <div className="space-y-2">
+            {weekDays.map(day => {
+              const dayEvents = getEventsForDay(day)
+              const dateStr = format(day, 'yyyy-MM-dd')
+              const isCurrentDay = dateStr === today
+
+              return (
+                <div
+                  key={dateStr}
+                  className={`rounded-2xl border transition-all ${
+                    isCurrentDay
+                      ? 'border-primary/30 bg-primary/5'
+                      : dayEvents.length > 0
+                        ? 'border-border-subtle bg-surface-2'
+                        : 'border-border-subtle/50 bg-transparent'
+                  }`}
+                >
+                  <div className="flex items-center gap-3 px-3 py-2.5">
+                    {/* Day label */}
+                    <div className={`text-center shrink-0 w-10 ${isCurrentDay ? 'text-primary' : 'text-text-secondary'}`}>
+                      <p className="text-[10px] font-medium uppercase tracking-wide">
+                        {format(day, 'EEE', { locale: es })}
+                      </p>
+                      <p className={`text-lg font-bold leading-none mt-0.5 ${isCurrentDay ? 'text-primary' : 'text-text-primary'}`}>
+                        {format(day, 'd')}
+                      </p>
+                    </div>
+
+                    {/* Events */}
+                    {dayEvents.length > 0 ? (
+                      <div className="flex-1 flex flex-col gap-1.5 min-w-0">
+                        {dayEvents.map(ev => {
+                          const tStyle = TYPE_COLORS[ev.type] ?? TYPE_COLORS.personal
+                          const extra = parseNotes(ev.notes)
+                          return (
+                            <button
+                              key={ev.id}
+                              onClick={() => setEditingEvent(ev)}
+                              className={`flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-left transition-all active:scale-[0.98] ${tStyle.bg}`}
+                            >
+                              <div
+                                className="w-2 h-2 rounded-full shrink-0"
+                                style={{ backgroundColor: ev.subjects?.color || '#6b7280' }}
+                              />
+                              <div className="flex-1 min-w-0">
+                                <p className={`text-xs font-medium truncate ${tStyle.text}`}>{ev.title}</p>
+                                {(extra.time || ev.subjects?.name) && (
+                                  <p className="text-[10px] text-text-secondary/70 truncate">
+                                    {extra.time && `${extra.time} · `}{ev.subjects?.name}
+                                  </p>
+                                )}
+                              </div>
+                              <span className={`shrink-0 text-[9px] font-medium px-1.5 py-0.5 rounded-full ${tStyle.bg} ${tStyle.text} border border-current/20`}>
+                                {TYPE_LABELS[ev.type] ?? ev.type}
+                              </span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-text-secondary/30 flex-1">Sin eventos</p>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          {weekOffset !== 0 && (
+            <button
+              onClick={() => setWeekOffset(0)}
+              className="w-full mt-2 py-2 text-xs text-primary font-medium text-center hover:bg-primary/5 rounded-xl transition-colors"
+            >
+              Volver a esta semana
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ── Filters (list mode only) ─────────────────────────── */}
+      {viewMode === 'list' && <div className="space-y-2 mb-4">
         {/* Type chips */}
         <div className="flex gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
           {ALL_TYPES.map(t => (
@@ -215,9 +364,10 @@ export default function AgendaClient({ events: initialEvents, today, subjects = 
             {loadingPast ? '...' : showPast ? 'Ocultar pasadas' : 'Ver pasadas'}
           </button>
         </div>
-      </div>
+      </div>}
 
-      {/* ── Empty state ─────────────────────────────────────── */}
+      {/* ── List: empty state ───────────────────────────────── */}
+      {viewMode === 'list' && <>{/* ── Empty state ─────────────────────────────────────── */}
       {dates.length === 0 && (
         <div className="rounded-3xl bg-surface-2 border border-border-subtle p-10 text-center mt-2">
           <div className="w-14 h-14 rounded-3xl bg-primary/10 flex items-center justify-center mx-auto mb-4">
@@ -340,7 +490,7 @@ export default function AgendaClient({ events: initialEvents, today, subjects = 
             )
           })}
         </div>
-      )}
+      )}</>}
 
       {editingEvent && (
         <EditEventModal

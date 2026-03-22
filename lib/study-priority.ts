@@ -12,7 +12,9 @@ import type {
   SubjectWithDetails,
   StudyPriorityResult,
   TopicStatus,
+  AcademicEventType,
 } from '@/types'
+import { EVENT_TYPE_LABELS } from '@/lib/constants'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -57,7 +59,7 @@ export function calculateEventUrgencyScore(
   referenceDate: Date
 ): { score: number; daysToEvent: number | null; eventType: AcademicEvent['type'] | null } {
   const subjectEvents = events
-    .filter(e => e.subject_id === subjectId)
+    .filter(e => e.subject_id === subjectId && e.type in WEIGHT.EVENT_WEIGHT)
     .map(e => ({
       ...e,
       days: differenceInDays(parseISO(e.date), referenceDate),
@@ -71,7 +73,7 @@ export function calculateEventUrgencyScore(
 
   const nearest = subjectEvents[0]
   const days = nearest.days
-  const baseWeight = WEIGHT.EVENT_WEIGHT[nearest.type]
+  const baseWeight = (WEIGHT.EVENT_WEIGHT as Record<string, number>)[nearest.type] ?? 0
 
   let urgencyMultiplier: number
   if (days <= WEIGHT.EXAM_MODE_THRESHOLD) {
@@ -307,10 +309,5 @@ export function getDaysColor(days: number): 'green' | 'amber' | 'red' {
  * Returns label for academic event type.
  */
 export function getEventTypeLabel(type: AcademicEvent['type']): string {
-  switch (type) {
-    case 'parcial': return 'Parcial'
-    case 'parcial_intermedio': return 'Parcial Intermedio'
-    case 'entrega_tp': return 'Entrega TP'
-    default: return type
-  }
+  return EVENT_TYPE_LABELS[type as AcademicEventType] ?? type
 }

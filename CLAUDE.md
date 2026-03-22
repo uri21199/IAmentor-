@@ -2,7 +2,7 @@
 
 PWA de productividad académica para estudiantes universitarios argentinos que trabajan. Genera planes diarios con IA, rastrea progreso académico y entrenamientos.
 
-**Prod:** https://iamentor.vercel.app | **Stack:** Next.js 14 App Router · TypeScript · Tailwind CSS · Supabase PostgreSQL · Claude API (claude-sonnet-4-5) · Vercel
+**Prod:** https://iamentor.vercel.app | **Stack:** Next.js 15 App Router · TypeScript · Tailwind CSS · Supabase PostgreSQL · Claude API (claude-sonnet-4-5) · Vercel
 
 ---
 
@@ -10,7 +10,7 @@ PWA de productividad académica para estudiantes universitarios argentinos que t
 
 | Layer | Tech | Version |
 |-------|------|---------|
-| Framework | Next.js App Router | 14.2.15 |
+| Framework | Next.js App Router | 15.4.11 |
 | Language | TypeScript | 5 |
 | Styling | Tailwind CSS | 3.4.1 |
 | Database | Supabase PostgreSQL + RLS | 15 |
@@ -144,3 +144,35 @@ El modelo base es `claude-sonnet-4-5`. Solo `validate-progress` usa Haiku (rapid
 
 - **Supabase MCP**: acceso directo a DB, schema, migraciones y tipos TypeScript. Usar para explorar tablas antes de escribir queries.
 - **Context7 MCP**: documentacion actualizada de Next.js 14, Tailwind, Supabase, date-fns. Usar con `use context7` en el prompt cuando necesites docs precisas.
+
+---
+
+## Registro de cambios — OBLIGATORIO
+
+**Al finalizar cualquier sesión donde se modifiquen archivos del proyecto, se DEBE agregar una entrada en `CHANGELOG.md`.**
+
+### Formato de entrada
+
+```md
+## [YYYY-MM-DD #N] — Título descriptivo del cambio
+
+**Fecha / Hora:** YYYY-MM-DD, mañana/tarde/noche
+**MCP / Skills:** herramientas de IA utilizadas (o — si ninguna)
+**Secciones:** área del producto afectada
+
+### Archivos modificados
+- `ruta/al/archivo.tsx`
+
+### Cambios técnicos
+- Qué cambió a nivel de código/lógica
+
+### Cambios en UX
+- Qué experimenta distinto el usuario
+
+### Cambios visuales
+- Qué debería verse diferente en pantalla
+```
+
+- El número `#N` es correlativo por día (si ya hay una entrada del mismo día, usar `#2`, `#3`, etc.)
+- Omitir secciones que no apliquen (ej: si no hay cambios visuales, no incluir esa sección)
+- Agregar la entrada **al principio** del archivo, debajo del título `# IAmentor — Registro de Cambios`

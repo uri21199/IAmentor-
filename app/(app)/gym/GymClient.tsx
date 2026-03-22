@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { format, parseISO } from 'date-fns'
+import { format, parseISO, getISOWeek, getYear } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { createClient } from '@/lib/supabase'
 import { Card, CardHeader, CardTitle } from '@/components/ui/Card'
@@ -9,12 +9,12 @@ import { Badge } from '@/components/ui/Badge'
 import Button from '@/components/ui/Button'
 import { getWorkoutPlan, getNextWorkoutType } from '@/lib/exercises'
 import { workoutTypeLabel, workoutTypeIcon, formatMinutes } from '@/lib/utils'
-import type { WorkoutType, Exercise, StudyMode } from '@/types'
+import type { WorkoutType, Workout, StudyMode } from '@/types'
 
 interface Props {
   energyLevel: number
-  recentWorkouts: any[]
-  todayWorkout: any | null
+  recentWorkouts: Workout[]
+  todayWorkout: Workout | null
   last7Days: string[]
   workoutDays: Set<string>
   today: string
@@ -50,8 +50,12 @@ export default function GymClient({
   const [showFeedbackModal, setShowFeedbackModal] = useState(false)
   const [perceivedEffort, setPerceivedEffort] = useState<string>('')
 
-  // Determine week number (number of weeks with at least one workout)
-  const weekNumber = Math.max(1, Math.ceil(recentWorkouts.length / 5))
+  // Determine week number: count distinct ISO calendar weeks that had at least one completed workout
+  const weekNumber = Math.max(1, new Set(
+    recentWorkouts
+      .filter(w => w.completed)
+      .map(w => { const d = parseISO(w.date); return `${getYear(d)}-W${getISOWeek(d)}` })
+  ).size)
 
   // Determine next workout type
   const nextType: WorkoutType = energyLevel <= 2
@@ -66,17 +70,22 @@ export default function GymClient({
   const weeklyCount = last7Days.filter(d => workoutDays.has(d)).length
   const longestStreak = calculateStreak(recentWorkouts)
 
-  function calculateStreak(workouts: any[]): number {
+  function calculateStreak(workouts: Workout[]): number {
+    const completedDates = Array.from(new Set(
+      workouts.filter(w => w.completed).map(w => w.date)
+    )).sort((a, b) => b.localeCompare(a))
+
+    if (completedDates.length === 0) return 0
+
     let streak = 0
-    const sorted = [...workouts].sort((a, b) => b.date.localeCompare(a.date))
     let prev = today
-    for (const w of sorted) {
-      const diff = Math.abs(
-        (new Date(prev).getTime() - new Date(w.date).getTime()) / (1000 * 60 * 60 * 24)
+    for (const date of completedDates) {
+      const diff = Math.round(
+        (new Date(prev).getTime() - new Date(date).getTime()) / (1000 * 60 * 60 * 24)
       )
-      if (diff <= 1 && w.completed) {
+      if (diff === 1 || (streak === 0 && diff === 0)) {
         streak++
-        prev = w.date
+        prev = date
       } else break
     }
     return streak

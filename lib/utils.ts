@@ -125,6 +125,12 @@ export function getDowArg(): number {
   return argDate.getDay()
 }
 
+/** Parses the JSON payload stored in academic_event.notes */
+export function parseEventNotes(notes: string | null): { topic_ids?: string[] } {
+  if (!notes) return {}
+  try { const p = JSON.parse(notes); return typeof p === 'object' ? p : {} } catch { return {} }
+}
+
 export function getGreeting(): string {
   const hour = parseInt(getCurrentTimeArg().split(':')[0], 10)
   if (hour >= 6 && hour < 13) return 'Buenos días'

@@ -81,27 +81,39 @@ La app mantiene una jerarquía académica completa (cuatrimestre → materia →
 | **Detección de Alucinación de Progreso** | Detecta si el usuario marca > 3 temas como dominados en < 2 horas y activa una micro-validación cognitiva generada por Claude Haiku. Si falla → revierte el tema a `yellow`. |
 | **Heatmap de Dominio Académico** | CSS-grid heatmap en la pantalla de Stats: filas = materias, columnas = semanas (8 semanas). Verde = dominado, amber = progreso, rojo = débil. Alerta automática si una materia lleva > 7 días sin actividad. |
 | **Ajuste por Carga Cognitiva** | `getWorkoutPlan()` detecta el `study_mode` activo (exam_prep / active_review). En semana de parciales fuerza movilidad (20 min) aunque la energía sea alta. Banner contextual en la pantalla de Gym. |
-| **PWA** | Service Worker (next-pwa), manifest, instalable en Android e iOS vía Safari. |
-| **Settings** | Google Calendar, push notifications toggle, info de la app. |
+| **PWA** | Service Worker (next-pwa), manifest, instalable en Android e iOS vía Safari. Shortcuts en Android (mantener ícono → accesos directos). |
+| **Settings** | Google Calendar, push notifications toggle, acceso rápido a Cuatrimestres / Cursada / Trabajo. |
 | **Configuración** | CRUD de cuatrimestres, horario de clases semanal, horario y modalidad de trabajo. |
 | **Error boundaries** | `error.tsx` en raíz y en `(app)/`. |
+| **Streaming SSE del plan** | Plan generado progresivamente — los bloques aparecen en tiempo real mientras Claude escribe. |
+| **Rate limiting** | `@upstash/ratelimit` + Redis en todos los endpoints `/api/ai/*`. Límites: plan 10/día, replan 5/día, parse 3-5/día. |
+| **Spaced repetition SM-2** | Al marcar un tema como verde, se calcula `next_review` con intervalos SM-2 lite (1/3/7/14/30 días). Chip amber "N para repasar" en el header de materia. |
+| **Timer de estudio libre** | Desde el FAB: selector materia+tema y Pomodoro fullscreen sin necesidad de plan activo. |
+| **Modo offline** | `OfflineIndicator` banner + `lib/offline-queue.ts` para cola de mutaciones. Al reconectar, sincroniza automáticamente. |
+| **Cron pre-generación plan** | Vercel Cron a las 06:00 UTC-3 genera planes provisionales usando el último check-in como baseline. |
+| **Loading skeletons** | Skeletons animados en Stats, Subjects, Agenda y SubjectDetail. |
+| **Flashcards de viaje (7.1)** | Bloques de viaje con `micro_review`: ícono de flashcard → overlay con pills swipeables + auto-evaluación 1-5. |
+| **Plan provisional (7.2)** | Sin check-in, el plan generado por el cron se muestra con banner "Plan provisional — hacé el check-in para personalizarlo". |
+| **Readiness score (7.4)** | Card 0-100 de preparación para el parcial más cercano (≤14 días): % verde × 0.7 + % amarillo × 0.15 + actividad reciente × 0.15. |
+| **Calificaciones** | Página dedicada `/grades` en el menú lateral. Agrupa notas por materia (dot de color). Flujo de 3 pasos: elegir materia → elegir fecha importante → ingresar nota. Si nota < 4 ofrece registrar fecha de recuperatorio (crea el evento automáticamente). Edición de nota existente vía PATCH. Solo muestra materias del semestre activo (inner join). |
+| **Nota en cards de eventos** | En el detalle de cada materia, las cards de "Fechas importantes" muestran el score coloreado (verde/amarillo/rojo) cuando hay una calificación asociada, reemplazando el badge de días restantes. |
+| **Correlación energía / completión** | Gráfico de dos líneas en Stats: energía promedio vs. completión del plan, últimos 30 días. |
+| **Micro-animación en bloques** | Scale + fondo verde al marcar un bloque completo (200ms). |
+| **Agenda vista semanal** | Toggle "Lista / Semana" con navegación por semanas anterior/siguiente. |
+| **Unread count dinámico** | Badge de notificaciones refleja el conteo real de no leídas desde la DB. |
+| **Bloques de examen en timeline** | Parciales con hora cargada aparecen como bloque rojo `exam` en el plan del día. |
 
 ### Backlog / Pendiente
 
 | Feature | Prioridad |
 |---------|-----------|
-| Streaming SSE en generación del plan (UX: elimina espera de 5s) | Alta |
-| Plan pre-generado a las 6 AM via Vercel Cron Job | Alta |
-| Loading skeletons en páginas SSR | Media |
-| UI para `travel_logs` (qué estudié en el viaje) | Media |
-| Vista de planes históricos (el dato existe en `daily_plans`) | Media |
-| Vista de calendario semanal del plan | Media |
-| Persistir borrador del check-in en localStorage | Media |
-| Error toasts visibles en fallos de API | Media |
-| Rate limiting en `/api/ai/*` (Upstash Redis) | Alta (seguridad) |
 | Upgrade Next.js a 15.x (vulnerabilidad conocida en 14.2.15) | Alta (seguridad) |
+| Planificador semanal `/weekly` con distribución sugerida por IA | Alta (producto) |
+| Validación de tamaño de archivos en endpoints parse-syllabus / parse-events | Media (seguridad) |
+| Fix onboarding: si se salta cuatrimestre, el paso de materias queda bloqueado | Media (bug) |
+| Vista de planes históricos (el dato existe en `daily_plans`) | Media |
+| Error toasts visibles en fallos de API | Media |
 | Focus trap en modales | Baja |
-| Íconos PWA reales (192px, 512px, apple-touch) | Baja |
 | Exportar plan a PDF o `.ics` | Baja |
 
 ---
@@ -164,6 +176,7 @@ DnD          │ @dnd-kit/core 6.3.1 + @dnd-kit/sortable 10.0.0
 │  ├── (app)/stats           Estadísticas (charts)            │
 │  ├── (app)/calendar        Vista de calendario              │
 │  ├── (app)/agenda          Vista de agenda                  │
+│  ├── (app)/grades          Calificaciones (todas las materias)   │
 │  ├── (app)/notifications   Lista de notificaciones          │
 │  └── (app)/settings/*      Google Calendar, push, config   │
 │                                                             │
@@ -264,8 +277,11 @@ IAmentor/
 │   │   │   ├── page.tsx                SSR: lista materias del semestre activo
 │   │   │   ├── SubjectsClient.tsx
 │   │   │   └── [id]/
-│   │   │       ├── page.tsx            SSR: fetch materia + árbol unidades/temas
-│   │   │       └── SubjectDetailClient.tsx  Toggle RGB, add evento, upload PDF
+│   │   │       ├── page.tsx            SSR: fetch materia + árbol unidades/temas + grades
+│   │   │       └── SubjectDetailClient.tsx  Toggle RGB, add evento, upload PDF, nota en cards
+│   │   ├── grades/
+│   │   │   ├── page.tsx                SSR: fetch grades + subjects activos + events
+│   │   │   └── GradesClient.tsx        Flujo 3 pasos: materia → fecha → nota
 │   │   ├── gym/
 │   │   │   ├── page.tsx
 │   │   │   └── GymClient.tsx           Rutina adaptativa, ejercicios, mark complete
@@ -299,9 +315,14 @@ IAmentor/
 │       │   └── validate/route.ts       POST: valida respuesta server-side → pasa/falla + revierte status
 │       ├── progress/
 │       │   └── snapshot/route.ts       POST: upsert snapshot diario · GET: grid semanal para heatmap
+│       ├── grades/
+│       │   ├── route.ts                GET: calificaciones por subject_id · POST: nueva calificación
+│       │   └── [id]/route.ts           PATCH: editar calificación · DELETE: eliminar
+│       ├── cron/
+│       │   └── generate-plans/route.ts POST: pre-genera planes diarios a las 6AM UTC-3 (Vercel Cron)
 │       ├── notifications/
 │       │   ├── route.ts                GET: evalúa triggers + persiste + retorna no leídas
-│       │   └── [id]/route.ts           PATCH: marcar como leída + retorna target_path
+│       │   └── [id]/route.ts           PATCH: marcar como leída · DELETE: eliminar
 │       └── push/
 │           ├── subscribe/route.ts      POST: registrar/eliminar suscripción push
 │           └── send/route.ts           POST: fire push via web-push (llamada interna)
@@ -317,17 +338,20 @@ IAmentor/
 │   │   └── TopicPill.tsx               Pill de tema con status red/yellow/green
 │   ├── features/
 │   │   ├── ReplanButton.tsx            Botón "Replanificar" con estado loading → /api/ai/replan
-│   │   ├── FabMenu.tsx                 FAB global: PostClaseModal + EventoModal + ImprevistoModal
+│   │   ├── FabMenu.tsx                 FAB global + modal estudio libre
 │   │   ├── EditEventModal.tsx          Modal de edición/eliminación/duplicación de eventos académicos
-│   │   ├── PomodoroFocus.tsx           Timer Pomodoro
+│   │   ├── PomodoroFocus.tsx           Timer Pomodoro (blockId opcional para estudio libre)
+│   │   ├── TravelFlashcard.tsx         Overlay fullscreen de flashcards swipeables para bloques de viaje
+│   │   ├── SyllabusImport.tsx          Import de programa de materia con IA (PDF/img → unidades+temas)
+│   │   ├── EventsImport.tsx            Import de fechas importantes con IA (PDF/img → academic_events)
 │   │   ├── NotificationCenter.tsx      Dropdown/panel de notificaciones (campanita)
 │   │   ├── NotificationBanner.tsx      Banner de notificación inline en la pantalla
 │   │   ├── ProgressHallucinationGuard.tsx  Modal de micro-validación cognitiva (MCQ)
 │   │   └── DomainHeatmap.tsx           CSS-grid heatmap de dominio por semana/materia
 │   └── layout/
-│       ├── BottomNav.tsx               Nav fija inferior (today/subjects/gym/stats/settings)
 │       ├── SideDrawer.tsx              Menú lateral deslizable
-│       └── AppShell.tsx                Header sticky + hamburguesa
+│       ├── AppShell.tsx                Header sticky + hamburguesa + badge dinámico notificaciones
+│       └── OfflineIndicator.tsx        Banner top: offline / sincronizando / sincronizado
 │
 ├── lib/
 │   ├── supabase.ts                     createClient() — componentes cliente
@@ -337,6 +361,9 @@ IAmentor/
 │   ├── study-priority.ts               Lógica PURA de priorización (sin DB, testeable)
 │   ├── exercises.ts                    48 ejercicios locales + getWorkoutPlan() + getNextWorkoutType()
 │   ├── utils.ts                        cn(), colores por tipo, íconos, timezone Argentina
+│   ├── fixed-blocks.ts                 buildFixedBlocks() — bloques determinísticos reutilizables
+│   ├── rate-limit.ts                   Helper Upstash ratelimit con fallback graceful
+│   ├── offline-queue.ts                Cola localStorage de mutaciones para modo offline
 │   ├── notifications-engine.ts         Motor PURO de triggers (sin DB, testeable)
 │   └── push.ts                         Helpers web-push para enviar notificaciones
 │
@@ -357,7 +384,8 @@ IAmentor/
 │   ├── migrations_v7.sql               pomodoro_sessions
 │   ├── migrations_v8.sql               pomodoro_sessions (versión actualizada)
 │   ├── migrations_v9.sql               Smart deadline alerts: event_id, trigger_days_before, etc.
-│   └── migrations_features456.sql      topic_completions + progress_snapshots (features 4-5-6)
+│   ├── migrations_features456.sql      topic_completions + progress_snapshots (features 4-5-6)
+│   └── migration_grades.sql            grades table + RLS (feature 7.5)
 │
 ├── scripts/
 │   └── db-reset.ts                     Hard reset de todas las tablas (irreversible)
@@ -442,8 +470,13 @@ auth.users  ← Supabase gestionado
     │                       challenge_question, challenge_options (JSONB),
     │                       challenge_correct_index (server-side), challenge_result
     │
-    └─── progress_snapshots subject_id, snapshot_date (UNIQUE/user+subject+date), [Feature 5]
-                            health_score (0.0–1.0), topics_json [{id, status}]
+    ├─── progress_snapshots subject_id, snapshot_date (UNIQUE/user+subject+date), [Feature 5]
+    │                       health_score (0.0–1.0), topics_json [{id, status}]
+    │
+    └─── grades             subject_id, event_id?, title, grade_type,           [Feature 7.5]
+                            score (numeric), max_score (default 10),
+                            notes, exam_date
+                            grade_type: parcial | parcial_intermedio | tp | final | laboratorio
 ```
 
 ### RLS — patrón aplicado en todas las tablas
@@ -554,6 +587,40 @@ Marca una notificación como leída.
 
 - **Body:** `{ read: true }`
 - **Response:** `{ ok: true, target_path: string | null }`
+
+### `DELETE /api/notifications/[id]`
+Elimina una notificación.
+
+- **Response:** 204 No Content
+
+### `GET /api/grades?subject_id=<id>`
+Lista todas las calificaciones de una materia.
+
+- **Response:** `Grade[]` (ordenado por exam_date DESC)
+
+### `POST /api/grades`
+Crea una nueva calificación.
+
+- **Body:** `{ subject_id, event_id?, title, grade_type, score?, max_score?, notes?, exam_date? }`
+- **Response:** `Grade` (201)
+
+### `PATCH /api/grades/[id]`
+Actualiza una calificación existente.
+
+- **Body:** campos parciales de `Grade`
+- **Response:** `Grade`
+
+### `DELETE /api/grades/[id]`
+Elimina una calificación.
+
+- **Response:** 204 No Content
+
+### `POST /api/cron/generate-plans`
+Pre-genera planes diarios para todos los usuarios activos (Vercel Cron, 06:00 UTC-3).
+
+- **Auth:** Header `Authorization: Bearer $CRON_SECRET`
+- **Acción:** Por cada usuario sin plan del día, genera uno usando el último check-in como baseline
+- **Response:** `{ processed: number, skipped: number }`
 
 ### `POST /api/push/subscribe`
 Registra o elimina una suscripción push del dispositivo.
@@ -1036,28 +1103,36 @@ TIPOGRAFÍA
 | Área | Estado | Notas |
 |------|--------|-------|
 | Auth + Onboarding | ✅ Funcional | Magic link + password. Wizard 4 pasos. |
-| Check-in diario | ✅ Funcional | 5 pasos. Trabajo omitido si `is_employed=false`. Materia desde DB. |
-| Plan IA | ✅ Funcional | Bloques determinísticos garantizados. Claude genera el resto. |
-| Replanificación | ✅ Funcional | Ajusta desde hora actual. Preserva completados y editados. |
-| Tracker académico | ✅ Funcional | CRUD temas/unidades/eventos. Toggle RGB. |
-| Registro post-clase | ✅ Funcional | FAB + pantalla de materia. Acordeón unidades/temas. Comprensión, tarea/TP, vinculación a evento, sugerencia por historial. |
-| Fechas importantes | ✅ Funcional | FAB + pantalla de materia. CRUD completo (crear/editar/eliminar/duplicar). Vínculo de temas. Timeline UI en agenda y materia. |
-| Agenda | ✅ Funcional | Filtros tipo + materia. Toggle pasados. Edición in-situ con `EditEventModal`. |
-| Calendario | ✅ Funcional | Vista mensual. Puntos de urgencia. Panel de detalle del día. Edición in-situ. |
+| Check-in diario | ✅ Funcional | 5 pasos. Trabajo omitido si `is_employed=false`. Materia desde DB. Borrador en localStorage. |
+| Plan IA | ✅ Funcional | SSE streaming progresivo. Bloques determinísticos garantizados. Claude genera el resto. |
+| Plan provisional | ✅ Funcional | Cron 6AM genera plan sin check-in. Banner "plan provisional" hasta que el usuario haga check-in. |
+| Replanificación | ✅ Funcional | Ajusta desde hora actual. Preserva completados y editados. Respeta bloques fijos. |
+| Tracker académico | ✅ Funcional | CRUD temas/unidades/eventos. Toggle RGB. Buscador de temas. Reordenamiento de unidades. |
+| Spaced repetition | ✅ Funcional | SM-2 lite: `next_review` por tema. Chip "N para repasar" en header. |
+| Registro post-clase | ✅ Funcional | FAB + pantalla de materia. Acordeón unidades/temas. Comprensión, tarea/TP, vinculación a evento. |
+| Fechas importantes | ✅ Funcional | FAB + pantalla de materia. CRUD completo. Vínculo de temas. Bloque `exam` en el timeline. |
+| Calificaciones | ✅ Funcional | Tabla `grades` por materia. CTA post-parcial automático. Review de 3 pasos. |
+| Readiness score | ✅ Funcional | Índice 0-100 calculado 14 días antes de cada parcial. Card verde/amber/rojo. |
+| Flashcards de viaje | ✅ Funcional | Bloques de viaje con `micro_review`: overlay swipeable + auto-eval 1-5. |
+| Agenda | ✅ Funcional | Filtros tipo + materia. Toggle pasados. Vista semanal. Edición in-situ. |
+| Calendario | ✅ Funcional | Vista mensual. Puntos de urgencia. Panel de detalle del día. |
 | Parsing PDF con IA | ✅ Funcional | Sube programa → temas. Sube calendario → fechas. |
-| Notificaciones | ✅ Funcional | Motor puro. 7 tipos. Dedup. Push VAPID. |
+| Notificaciones | ✅ Funcional | Motor puro. 7 tipos. Dedup. Push VAPID. Eliminación individual y en lote. |
 | Google Calendar | ✅ Funcional | OAuth2 completo. Token refresh automático. |
-| Gym tracker | ✅ Funcional | Rotación + sobrecarga progresiva + energía adaptativa + ajuste por carga cognitiva (Feature 6). |
-| Estadísticas | ✅ Funcional | Charts recharts. Insight semanal IA. Heatmap de dominio por semana (Feature 5). |
-| Detección de Alucinación | ✅ Funcional | Ventana 2h, umbral 3 temas, MCQ con Claude Haiku, reversión a yellow si falla (Feature 4). |
-| PWA | ✅ Funcional | SW generado, manifest, instalable. |
+| Gym tracker | ✅ Funcional | Rotación + sobrecarga progresiva + energía adaptativa + semanas calendario reales. |
+| Estadísticas | ✅ Funcional | Charts recharts. Correlación energía/completión. Progreso académico. |
+| Detección de Alucinación | ✅ Funcional | Ventana 2h, umbral 3 temas, MCQ con Claude Haiku, reversión a yellow si falla. |
+| Rate limiting IA | ✅ Funcional | Upstash Redis en todos los `/api/ai/*`. Fallback graceful si env vars no configuradas. |
+| Modo offline | ✅ Funcional | Cola localStorage + `OfflineIndicator`. Sincroniza al reconectar. |
+| PWA | ✅ Funcional | SW generado, manifest, instalable. Shortcuts en Android. |
+| Loading skeletons | ✅ Funcional | Stats, Subjects, Agenda, SubjectDetail. |
+| Settings hub | ✅ Funcional | Cards de acceso rápido a Cuatrimestres, Cursada, Trabajo. |
 | Deploy Vercel | ✅ Live | https://iamentor.vercel.app |
 | Tests E2E | ✅ 23/23 | Suite idempotente, 9 pasos. |
-| Travel logs | ⚠️ Schema listo | Tabla `travel_logs` existe. UI no implementada. |
-| Pomodoro | ⚠️ Componente listo | `PomodoroFocus.tsx` existe. No integrado al plan. |
+| Travel logs UI | ⚠️ Schema listo | Tabla `travel_logs` existe. UI de historial no implementada. |
 | Vista planes históricos | ❌ Pendiente | Datos en `daily_plans`. Sin UI. |
-| Streaming SSE | ❌ Pendiente | Claude responde completo. Sin streaming. |
-| Rate limiting IA | ❌ Pendiente | Sin protección ante abuso. |
+| Planificador semanal | ❌ Pendiente | Diseño técnico aprobado. `/weekly` pendiente. |
+| Next.js 15 upgrade | ❌ Pendiente | Vulnerabilidad en 14.2.15. Breaking changes en ~20 archivos. |
 
 ---
 

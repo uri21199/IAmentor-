@@ -151,7 +151,7 @@ export default function CursadaPage() {
   }, 0)
   const totalWeeklyHours = (totalWeeklyMinutes / 60).toFixed(1)
 
-  const subjectIds = [...new Set(classes.map(c => c.subject_id || c.subjects?.id))]
+  const subjectIds = Array.from(new Set(classes.map(c => c.subject_id || c.subjects?.id)))
 
   if (loading) {
     return (

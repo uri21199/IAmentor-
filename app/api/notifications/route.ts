@@ -12,6 +12,7 @@ import { NextResponse } from 'next/server'
 import { createServerSupabaseClient } from '@/lib/supabase-server'
 import { evaluateTriggers, checkAndScheduleAlerts } from '@/lib/notifications-engine'
 import { format } from 'date-fns'
+import { getTodayArg, getDowArg } from '@/lib/utils'
 import type { SubjectWithDetails } from '@/types'
 
 export async function GET() {
@@ -19,8 +20,8 @@ export async function GET() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const today    = format(new Date(), 'yyyy-MM-dd')
-  const todayDow = new Date().getDay()
+  const today    = getTodayArg()
+  const todayDow = getDowArg()
   const now      = new Date()
 
   // ── 1. Today's check-in ────────────────────────────────────────────────────

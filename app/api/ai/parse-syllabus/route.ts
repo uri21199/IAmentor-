@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServerSupabaseClient } from '@/lib/supabase-server'
+import { checkRateLimit } from '@/lib/rate-limit'
 import { anthropic } from '@/lib/anthropic'
 
 export async function POST(req: Request) {
@@ -8,12 +9,20 @@ export async function POST(req: Request) {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+    const rateLimitResponse = await checkRateLimit('parse-syllabus', user.id)
+    if (rateLimitResponse) return rateLimitResponse
+
     const formData = await req.formData()
     const file      = formData.get('file') as File | null
     const subjectId = formData.get('subject_id') as string | null
 
     if (!file || !subjectId) {
       return NextResponse.json({ error: 'Missing file or subject_id' }, { status: 400 })
+    }
+
+    const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
+    if (file.size > MAX_FILE_SIZE) {
+      return NextResponse.json({ error: 'File too large. Maximum size is 10 MB.' }, { status: 413 })
     }
 
     // Convert file to base64
